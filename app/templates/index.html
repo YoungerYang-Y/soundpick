@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}{{ app_name }} · 音频提取{% endblock %}
+
+{% block body %}
+<main class="page-shell" id="main-content">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="{{ app_name }}首页">
+      <span class="brand-mark" aria-hidden="true">音</span>
+      <span>{{ app_name }}</span>
+    </a>
+    <form action="/logout" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="button button--quiet" type="submit">退出登录</button>
+    </form>
+  </header>
+
+  <section class="workspace" aria-labelledby="page-title">
+    <div class="page-heading">
+      <p class="eyebrow">简单整理，随时收听</p>
+      <h1 id="page-title">把视频里的声音带走</h1>
+      <p class="intro">选择一种来源。每次处理一个视频，提取完整原音轨并保存为 MP3。</p>
+    </div>
+
+    <section class="panel source-panel" aria-labelledby="source-title">
+      <h2 id="source-title">选择视频来源</h2>
+      <div class="mode-switch" role="group" aria-label="输入方式">
+        <button class="mode-button is-active" type="button" data-mode="link"
+                aria-pressed="true" aria-controls="link-panel">分享链接</button>
+        <button class="mode-button" type="button" data-mode="file"
+                aria-pressed="false" aria-controls="file-panel">本地视频</button>
+      </div>
+
+      <div class="source-content" id="link-panel" data-panel="link">
+        <label class="field-label" for="share-text">粘贴分享链接或完整分享文本</label>
+        <textarea class="text-control text-control--area" id="share-text" name="share_text"
+                  rows="4" placeholder="在这里粘贴分享内容" spellcheck="false"></textarea>
+        <p class="field-help">支持粘贴链接，也可以粘贴平台提供的整段分享文本。</p>
+      </div>
+
+      <div class="source-content" id="file-panel" data-panel="file" hidden>
+        <label class="field-label" for="video-file">选择本地视频</label>
+        <input class="file-control" id="video-file" name="video_file" type="file" accept="video/*">
+        <p class="field-help">一次选择一个视频文件。</p>
+      </div>
+
+      <div class="availability" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <p>音频提取功能正在准备中，暂不可用</p>
+      </div>
+      <button class="button button--primary button--full" type="button" disabled>
+        开始提取
+      </button>
+    </section>
+
+    <p class="privacy-note">当前页面不会保存处理历史。</p>
+  </section>
+</main>
+{% endblock %}
