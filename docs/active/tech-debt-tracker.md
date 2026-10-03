@@ -4,10 +4,11 @@ updated: 2026-10-02
 
 # 技术债务追踪
 
-当前没有单独登记的技术债务。尚未实现的产品链路属于待办范围，记录在 [`docs/design-docs/initialization.md`](../design-docs/initialization.md) 的后续实现清单中；不要把未实现需求误报为已验证的缺陷。
+完整 MVP 的待验收范围记录在 [MVP 计划](./0.1.0/audio-extraction/plan.md)，不把缺外部条件的验证误报为已完成。
 
 | 编号 | 领域 | 问题描述 | 优先级 | 记录日期 | Owner | 关联计划 |
 |------|------|----------|--------|----------|-------|----------|
+| TD-001 | 测试客户端 | Starlette 对 httpx TestClient 发出弃用警告；当前可运行，后续核对 httpx2 兼容与锁文件 | P2 | 2026-10-02 | project | MVP 完成后单独处理 |
 
 ## 维护规则
 
