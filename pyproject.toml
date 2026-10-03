@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3,<10", "ruff>=0.9,<1"]
+dev = ["pytest>=8.3,<10", "ruff>=0.9,<1", "coverage>=7.16,<8"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
@@ -34,3 +34,14 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+concurrency = ["thread"]
+data_file = "work/coverage/.coverage"
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+fail_under = 85

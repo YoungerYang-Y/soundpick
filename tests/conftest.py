@@ -5,6 +5,14 @@ from app.config import Settings
 from app.main import create_app
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--require-media-tools",
+        action="store_true",
+        help="Fail instead of skipping real media tests when tools are missing",
+    )
+
+
 @pytest.fixture
 def settings(tmp_path):
     return Settings(
@@ -24,7 +32,7 @@ def client(settings):
 
 
 @pytest.fixture
-def real_tools(settings):
+def real_tools(settings, request):
     import os
     import shutil
 
@@ -35,5 +43,7 @@ def real_tools(settings):
         }
     )
     if not shutil.which(configured.ffmpeg_bin) or not shutil.which(configured.ffprobe_bin):
+        if request.config.getoption("--require-media-tools"):
+            pytest.fail("真实FFmpeg/FFprobe尚未提供，严格验收不能跳过媒体测试")
         pytest.skip("真实FFmpeg/FFprobe尚未提供，不能证明转码验收")
     return configured
