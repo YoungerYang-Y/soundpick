@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,13 +72,14 @@ class SafeHTTP:
         current = public_url(value)
         supplied = headers or {}
         try:
-            async with httpx.AsyncClient(
-                transport=self.transport,
-                trust_env=False,
-                timeout=httpx.Timeout(30, connect=10),
-                follow_redirects=False,
-            ) as client:
-                for hop in range(6):
+            for hop in range(6):
+                # Pinned IPs must not share cookies or TLS connections across redirect hosts.
+                async with httpx.AsyncClient(
+                    transport=self.transport,
+                    trust_env=False,
+                    timeout=httpx.Timeout(30, connect=10),
+                    follow_redirects=False,
+                ) as client:
                     addresses = await asyncio.wait_for(
                         self.resolve(
                             current.host, current.port or (443 if current.scheme == "https" else 80)
@@ -95,13 +96,22 @@ class SafeHTTP:
                         **supplied,
                         "Host": current.netloc.decode("ascii"),
                     }
-                    pinned = current.copy_with(host=addresses[0])
-                    async with client.stream(
-                        "GET",
-                        pinned,
-                        headers=request_headers,
-                        extensions={"sni_hostname": current.host},
-                    ) as response:
+                    async with AsyncExitStack() as responses:
+                        for index, address in enumerate(addresses):
+                            try:
+                                response = await responses.enter_async_context(
+                                    client.stream(
+                                        "GET",
+                                        current.copy_with(host=address),
+                                        headers=request_headers,
+                                        extensions={"sni_hostname": current.host},
+                                    )
+                                )
+                            except (httpx.ConnectError, httpx.ConnectTimeout):
+                                if index == len(addresses) - 1:
+                                    raise
+                            else:
+                                break
                         if follow_redirects and response.status_code in (301, 302, 303, 307, 308):
                             location = response.headers.get("location")
                             if not location or hop == 5:
