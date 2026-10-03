@@ -209,6 +209,8 @@ def create_app(
             ) from None
 
     async def receive_upload(task: Task, request: Request) -> dict:
+        if task.input_kind != "upload":
+            raise MediaError("此任务不接收本地视频，请重新创建任务", "input_conflict", 409)
         try:
             await tasks.receive(task, request.stream())
         except TimeoutError:
@@ -221,7 +223,7 @@ def create_app(
         owner = authorized(request, write=True)
         value = await json_input(request, UploadReservation)
         title = Path(value.filename.replace("\\", "/")).stem or "本地视频"
-        task = tasks.reserve(owner, title, task_id=value.task_id)
+        task = tasks.reserve(owner, title, task_id=value.task_id, input_kind="upload")
         return tasks.view(task)
 
     @app.post("/api/tasks/{task_id}/upload", status_code=202)
@@ -233,14 +235,16 @@ def create_app(
     async def upload(request: Request, filename: str = Query(default="本地视频", max_length=200)):
         owner = authorized(request, write=True)
         title = Path(filename.replace("\\", "/")).stem or "本地视频"
-        return await receive_upload(tasks.reserve(owner, title), request)
+        return await receive_upload(tasks.reserve(owner, title, input_kind="upload"), request)
 
     @app.post("/api/tasks/link", status_code=202)
     async def share_link(request: Request):
         owner = authorized(request, write=True)
         value = await json_input(request, LinkSubmission)
         _, url = extract_share_url(value.share_text, specs=platforms)
-        task = tasks.reserve(owner, "音拾音频", task_id=value.task_id)
+        task = tasks.reserve(
+            owner, "音拾音频", task_id=value.task_id, input_kind="link", share_url=url
+        )
         if task.state == "receiving" and task.runner is None:
             tasks.start(task, url)
         return tasks.view(task)

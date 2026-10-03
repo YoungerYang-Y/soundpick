@@ -86,8 +86,11 @@ def test_unexpected_failure_logs_stage_and_type_without_private_values(settings,
         manager = TaskManager(settings, MediaProcessor(settings), {}, SafeHTTP(resolve=dns))
         await manager.open()
         try:
-            task = manager.reserve("owner", "private-title", require_media=False)
-            manager.start(task, "https://v.douyin.com/private-share/")
+            url = "https://v.douyin.com/private-share/"
+            task = manager.reserve(
+                "owner", "private-title", require_media=False, input_kind="link", share_url=url
+            )
+            manager.start(task, url)
             # Missing adapter is an internal programming failure, not public platform content.
             await task.runner
             assert task.state == "failed"

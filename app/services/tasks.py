@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import fcntl
+import hashlib
 import logging
 import re
 import secrets
@@ -19,11 +20,12 @@ from app.resolver.registry import platform_of
 from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
 from app.services.errors import MediaError
 from app.services.media import MediaProcessor
-from app.services.network import SafeHTTP
+from app.services.network import SafeHTTP, public_url
 
 TaskState = Literal[
     "receiving", "resolving", "downloading", "converting", "ready", "failed", "cancelled"
 ]
+InputKind = Literal["upload", "link"]
 TERMINAL = {"ready", "failed", "cancelled"}
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,8 @@ class Task:
     owner: str
     directory: Path
     title: str
+    input_kind: InputKind = "upload"
+    input_fingerprint: str | None = None
     state: TaskState = "receiving"
     message: str = "正在接收视频"
     author: str = ""
@@ -130,13 +134,27 @@ class TaskManager:
         self._sweep()
 
     def reserve(
-        self, owner: str, title: str, *, require_media: bool = True, task_id: str | None = None
+        self,
+        owner: str,
+        title: str,
+        *,
+        require_media: bool = True,
+        task_id: str | None = None,
+        input_kind: InputKind = "upload",
+        share_url: str | None = None,
     ) -> Task:
         if task_id is not None and not re.fullmatch(r"[a-f0-9]{32}", task_id):
             raise MediaError("任务标识格式无效", "invalid_input", 400)
         self._sweep()
         if task_id in self.tasks:
-            return self.get(task_id, owner)
+            task = self.get(task_id, owner)
+            if task.input_kind != input_kind:
+                raise MediaError("任务标识已用于其他输入，请重新创建任务", "input_conflict", 409)
+            fingerprint = self._input_fingerprint(input_kind, share_url)
+            if task.input_fingerprint != fingerprint:
+                raise MediaError("任务标识已用于其他输入，请重新创建任务", "input_conflict", 409)
+            return task
+        fingerprint = self._input_fingerprint(input_kind, share_url)
         if require_media and not self.media.available:
             raise MediaError("媒体处理工具未就绪，请联系管理员", "media_unavailable", 503)
         self._sweep()
@@ -151,10 +169,26 @@ class TaskManager:
         except OSError:
             raise MediaError("临时存储不可用，请稍后重试", "storage_error", 503) from None
         title = title.encode("utf-8", errors="replace").decode("utf-8")
-        task = Task(task_id, owner, directory, title[:1000])
+        task = Task(
+            task_id,
+            owner,
+            directory,
+            title[:1000],
+            input_kind=input_kind,
+            input_fingerprint=fingerprint,
+        )
         task.receive_deadline = time.time() + self.settings.upload_timeout_seconds
         self.tasks[task.id] = task
         return task
+
+    @staticmethod
+    def _input_fingerprint(input_kind: InputKind, share_url: str | None) -> str | None:
+        if input_kind == "upload" and share_url is None:
+            return None
+        if input_kind == "link" and share_url:
+            normalized = str(public_url(share_url))
+            return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        raise MediaError("任务输入类型或分享链接无效", "invalid_input", 400)
 
     def get(self, task_id: str, owner: str) -> Task:
         self._sweep()
@@ -210,6 +244,8 @@ class TaskManager:
 
     async def receive(self, task: Task, stream: AsyncIterator[bytes]) -> None:
         self._sweep()
+        if task.input_kind != "upload":
+            raise MediaError("此任务不接收本地视频，请重新创建任务", "input_conflict", 409)
         if task.state != "receiving" or task.runner is not None:
             raise MediaError("任务不再接收视频，请查看原任务状态", "not_receiving", 409)
         task.runner = asyncio.current_task()
@@ -235,6 +271,8 @@ class TaskManager:
             task.runner = None
 
     def start(self, task: Task, share_url: str | None = None) -> None:
+        if self._input_fingerprint(task.input_kind, share_url) != task.input_fingerprint:
+            raise MediaError("任务输入与创建时不一致，请重新创建任务", "input_conflict", 409)
         if task.state != "receiving" or task.runner is not None:
             raise MediaError("任务已启动或停止，请查看原任务状态", "already_started", 409)
         self._stage(
