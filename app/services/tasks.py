@@ -10,24 +10,16 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from app.config import Settings
 from app.resolver.base import MediaResolver
 from app.resolver.registry import platform_of
+from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
 from app.services.errors import MediaError
 from app.services.media import MediaProcessor
 from app.services.network import SafeHTTP
 
 TERMINAL = {"ready", "failed", "cancelled"}
-
-
-def download_filename(title: str, kind: Literal["audio", "video"] = "audio") -> str:
-    clean = re.sub(r'[\x00-\x1f\x7f/\\:*?"<>|]', "_", title)
-    clean = re.sub(r"\s+", " ", clean).strip(" ._")
-    fallback = "音拾视频" if kind == "video" else "音拾音频"
-    extension = ".mp4" if kind == "video" else ".mp3"
-    return (clean[:60] or fallback) + extension
 
 
 @dataclass
@@ -260,12 +252,12 @@ class TaskManager:
         if task.state not in TERMINAL:
             self._finish(task, "cancelled", "处理已取消")
 
-    def acquire_file(self, task: Task, kind: Literal["audio", "video"] = "audio") -> Path:
+    def acquire_file(self, task: Task, kind: ArtifactKind = "audio") -> Path:
         if task.state != "ready":
             raise MediaError("音频尚未准备好", "not_ready", 409)
         if kind == "video" and not task.video_ready:
             raise MediaError("原视频暂无法保存为 MP4，MP3 仍可下载", "video_unavailable", 409)
-        path = task.directory / ("video.mp4" if kind == "video" else "audio.mp3")
+        path = task.directory / ARTIFACTS[kind].stored_name
         if not path.is_file():
             raise MediaError("文件已过期，请重新提取", "task_missing", 404)
         task.deliveries += 1

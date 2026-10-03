@@ -3,7 +3,6 @@
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 
 from fastapi import FastAPI, Query, Request
 from starlette.middleware.sessions import SessionMiddleware
@@ -24,10 +23,11 @@ from app.middleware import BodyLimitMiddleware
 from app.resolver.douyin import DouyinResolver
 from app.resolver.huoshan import HuoshanResolver
 from app.resolver.registry import extract_share_url
+from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
 from app.services.errors import MediaError
 from app.services.media import MediaProcessor
 from app.services.network import SafeHTTP
-from app.services.tasks import TaskManager, download_filename
+from app.services.tasks import TaskManager
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -232,15 +232,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         task_id: str,
         request: Request,
         download: bool = False,
-        kind: Literal["audio", "video"] = "audio",
+        kind: ArtifactKind = "audio",
     ):
         task = tasks.get(task_id, authorized(request))
         path = tasks.acquire_file(task, kind)
         response = ProtectedFileResponse(
             path,
-            media_type="video/mp4" if kind == "video" else "audio/mpeg",
+            media_type=ARTIFACTS[kind].media_type,
             filename=download_filename(task.title, kind),
-            content_disposition_type="attachment" if download or kind == "video" else "inline",
+            content_disposition_type="attachment"
+            if download or ARTIFACTS[kind].force_attachment
+            else "inline",
         )
         response.media_task = task
         return response
