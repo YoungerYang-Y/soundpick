@@ -402,8 +402,14 @@ class MediaProcessor:
         try:
             process = await asyncio.shield(spawning)
         except asyncio.CancelledError:
-            process = await spawning
-            await self._stop(process)
+
+            async def reap_spawned() -> None:
+                # Retain the spawn task until its handle arrives, even after another cancel.
+                process = await spawning
+                await self._stop(process)
+
+            with suppress(OSError):
+                await self._finish_cleanup(asyncio.create_task(reap_spawned()))
             raise
         try:
             output = bytearray()
@@ -417,7 +423,19 @@ class MediaProcessor:
                 raise MediaError("视频损坏或声音转换失败", "conversion_failed")
             return bytes(output)
         finally:
-            await self._stop(process)
+            await self._finish_cleanup(asyncio.create_task(self._stop(process)))
+
+    @staticmethod
+    async def _finish_cleanup(cleanup: asyncio.Task) -> None:
+        cancelled = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     @staticmethod
     async def _stop(process: asyncio.subprocess.Process) -> None:

@@ -3,6 +3,7 @@
 import asyncio
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -91,6 +92,71 @@ def test_attached_picture_is_not_video(real_tools, tmp_path, method, suffix):
     assert error.value.code == "missing_video"
     assert source.exists()
     assert not target.exists()
+
+
+@pytest.mark.parametrize("phase", ["spawn", "reap"])
+def test_repeated_cancel_during_spawn_or_reap_reaps_process(settings, monkeypatch, phase):
+    original_spawn = asyncio.create_subprocess_exec
+
+    async def run():
+        created = asyncio.Event()
+        reaping = asyncio.Event()
+        release = asyncio.Event()
+        processes = []
+
+        async def delayed_spawn(*args, **kwargs):
+            process = await original_spawn(*args, **kwargs)
+            processes.append(process)
+            created.set()
+            if phase == "spawn":
+                await release.wait()
+            else:
+                original_wait = process.wait
+
+                async def delayed_wait():
+                    reaping.set()
+                    await release.wait()
+                    return await original_wait()
+
+                process.wait = delayed_wait
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+        processor = MediaProcessor(settings)
+        task = asyncio.create_task(
+            processor._run(sys.executable, "-c", "import time; time.sleep(30)", capture=True)
+        )
+        try:
+            async with asyncio.timeout(3):
+                await created.wait()
+                task.cancel()
+                # Let _run enter cancellation cleanup while spawn still holds the handle.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                if phase == "reap":
+                    await reaping.wait()
+                task.cancel()
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                assert not task.done(), "Cancellation must wait for process cleanup"
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            assert processes[0].returncode is not None
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            for process in processes:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+
+    asyncio.run(run())
 
 
 def test_full_mp4_decode_is_bounded_and_reaps_on_timeout(real_tools, tmp_path):
