@@ -42,6 +42,7 @@ class Task:
     duration: float | None = None
     expires_at: float | None = None
     runner: asyncio.Task | None = None
+    cancellation: asyncio.Task[None] | None = None
     deliveries: int = 0
     cleanup_pending: bool = False
     video_ready: bool = False
@@ -243,12 +244,19 @@ class TaskManager:
             task.runner = None
 
     async def cancel(self, task: Task) -> None:
-        if task.state in TERMINAL:
-            return
-        if task.runner and task.runner is not asyncio.current_task():
-            task.runner.cancel()
+        # All callers await one operation; disconnecting a waiter cannot interrupt cleanup.
+        if task.cancellation is None:
+            if task.state in TERMINAL:
+                return
+            task.cancellation = asyncio.create_task(self._cancel(task))
+        await asyncio.shield(task.cancellation)
+
+    async def _cancel(self, task: Task) -> None:
+        runner = task.runner
+        if runner is not None and runner is not asyncio.current_task():
+            runner.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await task.runner
+                await runner
         if task.state not in TERMINAL:
             self._finish(task, "cancelled", "处理已取消")
 
