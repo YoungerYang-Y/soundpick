@@ -1,6 +1,6 @@
 # 平台解析与证据边界
 
-解析调查日期：2026-10-02；真实抖音转码复核：2026-10-03。本记录用于说明外部来源的实际限制，不代替 [需求规格](../active/0.1.0/audio-extraction/spec.md)。
+解析调查日期：2026-10-02；真实抖音及火山版转码复核：2026-10-03。本记录用于说明外部来源的实际限制，不代替 [需求规格](../active/0.1.0/audio-extraction/spec.md)。
 
 ## 原视频来源规则
 
@@ -14,11 +14,20 @@
 |---|---|---|
 | 抖音 video/7521023890996514083 | 当前 API 实网解析、下载 15,254,144 字节、真实 FFmpeg 转码、附件下载及 Range 206 通过；原音轨与 MP3 均为 319.852993 秒，输出 7,678,162 字节；原视频与 MP3 首、中、尾采样声音相关性均高于 0.999 | 仅证明这个样本，不能保证所有抖音分享链接；不证明手机真机保存 |
 | 抖音短链 mXosMBsOHF0 | 调查中可跳转分享页，但该 ID 的 Feed 仅返回其他推荐视频；应用必须拒绝 | 不能拿推荐首条作成功样本 |
-| 火山 share.huoshan.com/hotsoon/s/XwMt9xLSG58 | 调查中旧短链及 item/info 接口跳转至抖音首页，规范页返回 502；当前无可用样本 | 不证明火山功能可用；仍需新分享样本或可靠解析端点 |
+| 火山版短链 v.douyin.com/DUMJbobJ4gY/ | 官方跳转标识 aweme_hotsoon，精确目标 7659736603242784995；当前 API 实网下载 2,986,909 字节并转换为 290,942 字节 MP3；原音轨与输出均为 12.050998 秒；附件、Range 206 与任务清理通过 | 一个当前火山版共用抖音域的分享样本；不证明全部火山链接或手机真机保存 |
+| 火山旧域 share.huoshan.com/hotsoon/s/XwMt9xLSG58 | 调查中旧短链及 item/info 接口跳转至抖音首页，规范页返回 502 | 旧 huoshan.com 域样本仍未恢复，不能用当前共用域样本替代该证据 |
 
 火山旧实现来源为 [parse-video 火山适配](https://github.com/wujunwei928/parse-video/blob/master/parser/huoshan.go)。保留可配置 JSON provider 是替换路径，不代表已经有成功接入的外部服务。
 
 抖音实网重下载得到的原视频 SHA-256 为 `dbaca1bc3647bf46f657e6f68b2702e545c9220aff5e28e2cf56395d431bca02`，与先前下载的精确 ID 样本一致。基于该视频的本地转换抽样对比位置为 0.3 秒、159.9264965 秒和 318.552993 秒，各取 1 秒声音，相关性分别为 0.999992、0.999984、0.999948；这是抽样内容证据，结合全长时长与第一音轨映射，不声称逐个采样点无损一致。测试用媒体和检查结果仅保留在 Git 忽略目录；工具来源见 [媒体工具安装记录](./media-tools.md)。
+
+## 当前火山版分享证据
+
+[头条主站公开分享帖](https://www.toutiao.com/video/7659994808300011560/)发布日期为 2026-07-08，分享文案包含“复制打开抖音火山版”和短链 `https://v.douyin.com/DUMJbobJ4gY/`。2026-10-03 使用项目 SafeHTTP GET 短链，官方 302 指向 `www.iesdouyin.com/share/video/7659736603242784995/`，查询参数为 `app=aweme_hotsoon`、`from_aid=8663`。未使用登录凭据，记录不保留完整签名地址。维护者 [parse-video-py 实现](https://github.com/wujunwei928/parse-video-py/blob/dab12708368eae054ba2dae5db16d8b040b9029e/src/parse_video_py/parser/douyin.py)也将抖音和抖音火山版共用解析器。
+
+当前输入主机已登记，现有 DouyinResolver 按官方视频 ID 精确选取 `video.play_addr`，无需新增适配代码。API 测试以含“复制打开抖音火山版”的分享文字为输入，执行真实公网解析、下载和 FFmpeg 转码；下载的原视频 SHA-256 为 `6ac4535cc2a85e3f01fbd603cec22bd32fa1c5989089bee6f904eaf53d044026`，与独立来源调查的完整响应一致。首、中、尾从 0.3 秒、6.025499 秒、10.750998 秒各解码 1 秒，相关性分别为 0.999782、0.999951、0.999989。MP3 SHA-256 为 `ec0d81fa6ae1d673a0889b06e0d34c8e1727b53417381ed7114bcf58eae503cb`。
+
+来源与跳转证据在忽略目录 `work/huoshan-source-check.json`，完整 API 和抽样结果在 `work/huoshan-live-api-check.json`。本次使用 TestClient 执行真实外部请求与真实媒体工具，不是手机真机测试；首期火山版输入已有一个成功样本，旧域适配仍单独保留限制。
 
 ## 服务替换
 
