@@ -3,6 +3,7 @@
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Query, Request
 from starlette.middleware.sessions import SessionMiddleware
@@ -227,14 +228,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await tasks.release_file(self.media_task)
 
     @app.api_route("/files/{task_id}", methods=["GET", "HEAD"])
-    async def audio_file(task_id: str, request: Request, download: bool = False):
+    async def audio_file(
+        task_id: str,
+        request: Request,
+        download: bool = False,
+        kind: Literal["audio", "video"] = "audio",
+    ):
         task = tasks.get(task_id, authorized(request))
-        path = tasks.acquire_file(task)
+        path = tasks.acquire_file(task, kind)
         response = ProtectedFileResponse(
             path,
-            media_type="audio/mpeg",
-            filename=download_filename(task.title),
-            content_disposition_type="attachment" if download else "inline",
+            media_type="video/mp4" if kind == "video" else "audio/mpeg",
+            filename=download_filename(task.title, kind),
+            content_disposition_type="attachment" if download or kind == "video" else "inline",
         )
         response.media_task = task
         return response

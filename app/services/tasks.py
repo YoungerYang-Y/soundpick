@@ -10,6 +10,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from app.config import Settings
 from app.resolver.base import MediaResolver
@@ -21,10 +22,12 @@ from app.services.network import SafeHTTP
 TERMINAL = {"ready", "failed", "cancelled"}
 
 
-def download_filename(title: str) -> str:
+def download_filename(title: str, kind: Literal["audio", "video"] = "audio") -> str:
     clean = re.sub(r'[\x00-\x1f\x7f/\\:*?"<>|]', "_", title)
     clean = re.sub(r"\s+", " ", clean).strip(" ._")
-    return (clean[:60] or "音拾音频") + ".mp3"
+    fallback = "音拾视频" if kind == "video" else "音拾音频"
+    extension = ".mp4" if kind == "video" else ".mp3"
+    return (clean[:60] or fallback) + extension
 
 
 @dataclass
@@ -41,6 +44,8 @@ class Task:
     runner: asyncio.Task | None = None
     deliveries: int = 0
     cleanup_pending: bool = False
+    video_ready: bool = False
+    video_message: str = ""
 
 
 class TaskManager:
@@ -155,6 +160,13 @@ class TaskManager:
             "preview_url": f"/files/{task.id}" if ready else None,
             "download_url": f"/files/{task.id}?download=1" if ready else None,
             "filename": download_filename(task.title) if ready else None,
+            "video_download_url": (
+                f"/files/{task.id}?kind=video&download=1" if ready and task.video_ready else None
+            ),
+            "video_filename": (
+                download_filename(task.title, "video") if ready and task.video_ready else None
+            ),
+            "video_message": task.video_message if ready else "",
         }
 
     def _finish(self, task: Task, state: str, message: str) -> None:
@@ -206,6 +218,16 @@ class TaskManager:
                 task.duration = await self.media.extract_audio(
                     task.directory / "input", task.directory / "audio.mp3"
                 )
+                task.message = "正在准备原视频下载"
+                try:
+                    await self.media.prepare_video(
+                        task.directory / "input", task.directory / "video.mp4"
+                    )
+                    task.video_ready = True
+                except MediaError as exc:
+                    if exc.code == "media_timeout":
+                        raise
+                    task.video_message = "原视频暂无法保存为 MP4，MP3 仍可下载"
                 (task.directory / "input").unlink(missing_ok=True)
                 self._finish(task, "ready", "提取完成，可以试听或保存")
         except asyncio.CancelledError:
@@ -230,12 +252,14 @@ class TaskManager:
         if task.state not in TERMINAL:
             self._finish(task, "cancelled", "处理已取消")
 
-    def acquire_file(self, task: Task) -> Path:
+    def acquire_file(self, task: Task, kind: Literal["audio", "video"] = "audio") -> Path:
         if task.state != "ready":
             raise MediaError("音频尚未准备好", "not_ready", 409)
-        path = task.directory / "audio.mp3"
+        if kind == "video" and not task.video_ready:
+            raise MediaError("原视频暂无法保存为 MP4，MP3 仍可下载", "video_unavailable", 409)
+        path = task.directory / ("video.mp4" if kind == "video" else "audio.mp3")
         if not path.is_file():
-            raise MediaError("音频已过期，请重新提取", "task_missing", 404)
+            raise MediaError("文件已过期，请重新提取", "task_missing", 404)
         task.deliveries += 1
         return path
 
