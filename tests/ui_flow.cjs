@@ -29,7 +29,7 @@ const caps = { media_available: true, platforms: [{ name: '抖音', available: t
 } };
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); await new Promise(resolve => setImmediate(resolve)); };
-async function harness(initialCapabilities = caps) {
+async function harness(initialCapabilities = caps, options = {}) {
   const template = fs.readFileSync('app/templates/index.html', 'utf8');
   const elements = Object.fromEntries([...template.matchAll(/<[^>]*\bid="([\w-]+)"[^>]*>/g)].map(match => [match[1], new Element(match[1], {}, match[0])]));
   const modes = ['link', 'file'].map(mode => new Element('', { mode }));
@@ -44,6 +44,7 @@ async function harness(initialCapabilities = caps) {
   const timers = new Map(), routes = [], requests = [], xhrs = [], shares = [];
   function queue(route, result, options = {}) { routes.push({ path: route, result, ...options }); }
   queue('/api/capabilities', initialCapabilities);
+  for (const [route, result, routeOptions] of options.queuedRoutes || []) queue(route, result, routeOptions);
   async function fetch(route, options = {}) {
     requests.push({ path: route, options });
     const next = routes.shift(); assert.ok(next, `unexpected fetch ${route}`); assert.equal(route, next.path);
@@ -71,7 +72,17 @@ async function harness(initialCapabilities = caps) {
   const navigator = { clipboard: { readText: async () => { throw new Error('denied'); } },
     canShare: () => true, share: async data => { shares.push(data); throw Object.assign(new Error('cancelled'), { name: 'AbortError' }); } };
   class ControlledDate extends Date { static now() { return mockedNow; } }
-  const context = vm.createContext({ document, window, navigator, fetch, File, Response, ReadableStream, Uint8Array, URL,
+  const storage = options.storage || new Map();
+  const sessionStorage = options.storageUnavailable ? {
+    getItem() { throw new Error('storage unavailable'); },
+    setItem() { throw new Error('storage unavailable'); },
+    removeItem() { throw new Error('storage unavailable'); },
+  } : {
+    getItem(key) { return storage.get(key) ?? null; },
+    setItem(key, value) { storage.set(key, String(value)); },
+    removeItem(key) { storage.delete(key); },
+  };
+  const context = vm.createContext({ document, window, navigator, fetch, sessionStorage, File, Response, ReadableStream, Uint8Array, URL,
     Date: ControlledDate, XMLHttpRequest: XHR, AbortController,
     crypto: { getRandomValues: array => array.fill(0xaa + 0x11 * randomCount++) },
     setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, ms }); return id; }, clearTimeout: id => timers.delete(id), console });
@@ -94,13 +105,112 @@ async function harness(initialCapabilities = caps) {
   const click = async id => { assert.equal(elements[id].hidden, false, `${id} is hidden`); assert.equal(elements[id].disabled, false, `${id} is disabled`); await elements[id].trigger('click'); };
   const submit = () => elements['extraction-form'].trigger('submit');
   async function fireTimer(ms) { const entry = [...timers].find(([, timer]) => timer.ms === ms); assert.ok(entry, `missing timer ${ms}`); timers.delete(entry[0]); const pending = entry[1].fn(); await flush(); return pending; }
-  return { ui: elements, document, window, navigator, timers, routes, requests, xhrs, shares, queue, task, click, submit, fireTimer,
+  return { ui: elements, document, window, navigator, storage, timers, routes, requests, xhrs, shares, queue, task, click, submit, fireTimer,
     mode: value => modes[value === 'file' ? 1 : 0].trigger('click'), setNow: value => { mockedNow = value; } };
 }
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 const taskPath = `/api/tasks/${'a'.repeat(32)}`;
+const storedTaskKey = 'soundpick.current-task.v1';
+const storedTask = (overrides = {}) => JSON.stringify({ id: 'a'.repeat(32), confirmed: true, cancelRequested: false, ...overrides });
+const serverTask = state => ({ id: 'a'.repeat(32), state, message: '', title: '恢复的任务', author: '', duration_seconds: 2,
+  expires_at: Date.now() / 1000 + 3600, preview_url: `/files/${'a'.repeat(32)}`, download_url: `/files/${'a'.repeat(32)}?download=1`, filename: '恢复.mp3' });
 async function startLink(h, state = 'resolving', extra = {}) { h.ui['share-text'].value = '分享链接'; h.queue('/api/tasks/link', h.task(state, extra)); await h.submit(); }
+
+test('reload restores the current in-progress or ready task from server truth', async () => {
+  for (const status of ['converting', 'ready']) {
+    const storage = new Map([[storedTaskKey, storedTask()]]);
+    const h = await harness(caps, { storage, queuedRoutes: [[taskPath, serverTask(status)]] });
+    assert.equal(h.requests.at(-1).path, taskPath);
+    assert.equal(h.ui['source-fields'].disabled, status !== 'ready');
+    assert.equal(h.ui['task-heading'].textContent, status === 'ready' ? '恢复的任务' : '正在提取完整音轨');
+    assert.equal(h.ui['result-content'].hidden, status !== 'ready');
+    assert.deepEqual(Object.keys(JSON.parse(storage.get(storedTaskKey))).sort(), ['cancelRequested', 'confirmed', 'id']);
+    assert.equal(JSON.parse(storage.get(storedTaskKey)).id, 'a'.repeat(32));
+  }
+});
+
+test('restoration keeps the form busy while capabilities and task status load', async () => {
+  const capabilities = deferred(), storage = new Map([[storedTaskKey, storedTask()]]);
+  const h = await harness(capabilities.promise, { storage, queuedRoutes: [[taskPath, serverTask('converting')]] });
+  assert.equal(h.ui['source-fields'].disabled, true);
+  await h.submit();
+  assert.equal(h.requests.filter(request => request.path === '/api/tasks/link').length, 0);
+  capabilities.resolve(caps); await flush();
+  assert.equal(h.ui['source-fields'].disabled, true);
+  assert.equal(JSON.parse(storage.get(storedTaskKey)).id, 'a'.repeat(32));
+});
+
+test('confirmed missing task clears storage and unlocks a fresh task', async () => {
+  const storage = new Map([[storedTaskKey, storedTask()]]);
+  const h = await harness(caps, { storage, queuedRoutes: [[taskPath, httpError(404)]] });
+  assert.equal(storage.has(storedTaskKey), false);
+  assert.equal(h.ui['task-heading'].textContent, '结果已过期');
+  assert.equal(h.ui['source-fields'].disabled, false);
+});
+
+test('unconfirmed 404 stays recoverable and a cancel request survives another reload', async () => {
+  const storage = new Map([[storedTaskKey, storedTask({ confirmed: false })]]);
+  const h = await harness(caps, { storage, queuedRoutes: [[taskPath, httpError(404)]] });
+  assert.equal(h.ui['source-fields'].disabled, true);
+  assert.equal(h.ui['reconnect-button'].hidden, false);
+  assert.equal(h.ui['cancel-button'].hidden, false);
+  h.queue(`${taskPath}/cancel`, httpError(404)); await h.click('cancel-button');
+  assert.equal(JSON.parse(storage.get(storedTaskKey)).cancelRequested, true);
+
+  const restored = await harness(caps, { storage, queuedRoutes: [[taskPath, serverTask('resolving')], [`${taskPath}/cancel`, serverTask('cancelled')]] });
+  assert.equal(restored.requests.at(-1).path, `${taskPath}/cancel`);
+  assert.equal(restored.ui['task-heading'].textContent, '已取消处理');
+  assert.equal(restored.ui['source-fields'].disabled, false);
+});
+
+for (const status of [401, 403]) test(`restoration HTTP ${status} clears stale recovery state and shows auth feedback`, async () => {
+  const storage = new Map([[storedTaskKey, storedTask()]]);
+  const h = await harness(caps, { storage, queuedRoutes: [[taskPath, httpError(status)]] });
+  assert.equal(h.ui['source-fields'].disabled, false);
+  assert.equal(h.ui['reconnect-button'].hidden, true);
+  assert.equal(h.ui['new-task-button'].hidden, false);
+  assert.match(h.ui['task-message'].textContent, status === 401 ? /登录已失效/ : /页面验证已过期/);
+  assert.equal(storage.has(storedTaskKey), false);
+});
+
+for (const status of [401, 403]) test(`cancel auth failure during restoration clears stale recovery state (${status})`, async () => {
+  const storage = new Map([[storedTaskKey, storedTask()]]), pendingStatus = deferred();
+  const h = await harness(caps, { storage, queuedRoutes: [[taskPath, pendingStatus, { delayAbort: true }]] });
+  h.queue(`${taskPath}/cancel`, httpError(status));
+  await h.click('cancel-button');
+  pendingStatus.resolve(serverTask('resolving')); await flush();
+  assert.equal(storage.has(storedTaskKey), false);
+  assert.equal(h.ui['source-fields'].disabled, false);
+  assert.equal(h.ui['cancel-button'].hidden, true);
+  assert.equal(h.ui['new-task-button'].hidden, false);
+  assert.match(h.ui['task-message'].textContent, status === 401 ? /登录已失效/ : /页面验证已过期/);
+});
+
+test('restoring a receiving upload never resends its unavailable file', async () => {
+  const storage = new Map([[storedTaskKey, storedTask()]]);
+  const h = await harness(caps, { storage, queuedRoutes: [[taskPath, serverTask('receiving')]] });
+  assert.equal(h.xhrs.length, 0);
+  h.queue(taskPath, serverTask('failed')); await h.fireTimer(1800);
+  assert.equal(h.xhrs.length, 0);
+  assert.equal(h.ui['task-heading'].textContent, '这次未能完成');
+});
+
+test('storage failure does not block an ordinary task in the current page', async () => {
+  const h = await harness(caps, { storageUnavailable: true });
+  await startLink(h);
+  assert.equal(h.ui['task-heading'].textContent, '正在解析分享内容');
+  assert.equal(h.ui['source-fields'].disabled, true);
+});
+
+test('session storage contains only the current task id and recovery flags', async () => {
+  const h = await harness(); await startLink(h, 'ready');
+  const saved = JSON.parse(h.storage.get(storedTaskKey));
+  assert.deepEqual(Object.keys(saved).sort(), ['cancelRequested', 'confirmed', 'id']);
+  assert.deepEqual(saved, { id: 'a'.repeat(32), confirmed: true, cancelRequested: false });
+  await h.click('new-task-button');
+  assert.equal(h.storage.has(storedTaskKey), false);
+});
 
 test('pagehide invalidates a delayed poll failure before pageshow renders ready', async () => {
   const h = await harness(); await startLink(h);
@@ -234,7 +344,11 @@ test('XHR HTTP 404 for a confirmed reservation releases controls with an expired
 for (const status of [401, 403, 404]) test(`poll HTTP ${status} has explicit auth or expiry handling`, async () => {
   const h = await harness(); await startLink(h); h.queue(taskPath, httpError(status)); await h.fireTimer(1800);
   if (status === 404) { assert.equal(h.ui['source-fields'].disabled, false); assert.match(h.ui['task-message'].textContent, /过期/); }
-  else { assert.equal(h.ui['source-fields'].disabled, true); assert.match(h.ui['task-message'].textContent, status === 401 ? /登录已失效/ : /页面验证已过期/); }
+  else {
+    assert.equal(h.ui['source-fields'].disabled, true);
+    assert.match(h.ui['task-message'].textContent, status === 401 ? /登录已失效/ : /页面验证已过期/);
+    assert.equal(h.storage.has(storedTaskKey), true);
+  }
 });
 for (const status of [401, 403]) test(`creation HTTP ${status} is a confirmed rejection that can be retried after refreshing`, async () => {
   const h = await harness(); h.ui['share-text'].value = '分享链接'; h.queue('/api/tasks/link', httpError(status)); await h.submit();
@@ -321,6 +435,63 @@ test('pageshow reconfirms a cancellation whose old response belongs to the hidde
   oldCancel.resolve(h.task('cancelled')); await cancelling; await flush();
   assert.equal(h.ui['task-heading'].textContent, '已取消处理');
   assert.equal(h.ui['source-fields'].disabled, false); assert.equal(h.routes.length, 0);
+});
+test('late creation success preserves a newer ready result and prepared share cache', async () => {
+  const h = await harness(), creation = deferred();
+  h.ui['share-text'].value = '分享链接'; h.queue('/api/tasks/link', creation);
+  const submitting = h.submit(); await flush();
+  h.queue(taskPath, h.task('ready')); await h.window.trigger('online'); await flush();
+  h.queue(`http://localhost/files/${'a'.repeat(32)}?download=1`, new Response(new Uint8Array([1, 2, 3])));
+  await h.click('prepare-share');
+  const message = h.ui['task-message'].textContent;
+  creation.resolve(h.task('resolving')); await submitting; await flush();
+  assert.equal(h.ui['result-content'].hidden, false);
+  assert.equal(h.ui['source-fields'].disabled, false);
+  assert.equal(h.ui['new-task-button'].hidden, false);
+  assert.equal(h.ui['share-button'].hidden, false);
+  assert.equal(h.ui['task-message'].textContent, message);
+  await h.click('share-button'); assert.equal(h.shares[0].files[0].size, 3);
+});
+test('late creation network failure preserves ready controls after visibility recovery', async () => {
+  const h = await harness(), creation = deferred();
+  h.ui['share-text'].value = '分享链接'; h.queue('/api/tasks/link', creation);
+  const submitting = h.submit(); await flush();
+  h.queue(taskPath, h.task('ready')); await h.document.trigger('visibilitychange'); await flush();
+  const message = h.ui['task-message'].textContent;
+  creation.reject(new TypeError('response lost')); await submitting; await flush();
+  assert.equal(h.ui['result-content'].hidden, false);
+  assert.equal(h.ui['source-fields'].disabled, false);
+  assert.equal(h.ui['new-task-button'].hidden, false);
+  assert.equal(h.ui['reconnect-button'].hidden, true);
+  assert.equal(h.ui['task-message'].textContent, message);
+  assert.equal(JSON.parse(h.storage.get(storedTaskKey)).confirmed, true);
+});
+test('status recovery starts a reserved upload once and ignores its late receiving reservation', async () => {
+  const h = await harness(), reservation = deferred();
+  await h.mode('file'); h.ui['video-file'].files = [new File(['1234'], '视频.mp4')];
+  h.queue('/api/tasks/reservations', reservation);
+  const submitting = h.submit(); await flush();
+  h.queue(taskPath, h.task('receiving')); await h.window.trigger('online'); await flush();
+  assert.equal(h.xhrs.length, 1); assert.equal(h.ui['upload-progress'].hidden, false);
+  reservation.resolve(h.task('receiving')); await submitting; await flush();
+  assert.equal(h.xhrs.length, 1); assert.equal(h.ui['upload-progress'].hidden, false);
+  await h.xhrs[0].respond(202, h.task('converting')); await flush();
+  h.queue(taskPath, h.task('ready')); await h.fireTimer(1800);
+  assert.equal(h.ui['result-content'].hidden, false); assert.equal(h.xhrs.length, 1);
+});
+test('late creation still retries cancellation after status recovery and a lost cancel response', async () => {
+  const h = await harness(), creation = deferred(), cancellation = deferred();
+  h.ui['share-text'].value = '分享链接'; h.queue('/api/tasks/link', creation);
+  const submitting = h.submit(); await flush();
+  h.queue(`${taskPath}/cancel`, httpError(404)); await h.click('cancel-button');
+  h.queue(taskPath, h.task('resolving')); h.queue(`${taskPath}/cancel`, cancellation);
+  await h.click('reconnect-button'); await flush();
+  creation.resolve(h.task('resolving')); await flush();
+  h.queue(`${taskPath}/cancel`, h.task('cancelled'));
+  cancellation.reject(new TypeError('cancel response lost')); await submitting; await flush();
+  assert.equal(h.ui['task-heading'].textContent, '已取消处理');
+  assert.equal(h.ui['source-fields'].disabled, false); assert.equal(h.routes.length, 0);
+  assert.equal(h.requests.filter(request => request.path === `${taskPath}/cancel`).length, 3);
 });
 test('pageshow also resumes an idle page so later tasks can render and poll', async () => {
   const h = await harness(); await h.window.trigger('pagehide'); await h.window.trigger('pageshow', { persisted: true });

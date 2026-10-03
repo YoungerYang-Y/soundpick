@@ -1,6 +1,7 @@
 import { createTaskView, terminalStates, sizeLabel } from './task-view.js';
 import { createFileSharing } from './file-share.js';
 
+const taskStorageKey = 'soundpick.current-task.v1';
 if (document.querySelector('#extraction-app')) initialize();
 
 function initialize() {
@@ -17,7 +18,7 @@ function initialize() {
   // All task/transport lifetimes share this state; old generations cannot repaint a new view.
   const state = { mode: 'link', capabilities: null, busy: false, task: null, generation: 0,
     creation: null, xhr: null, pollController: null, pollTimer: null, expiryTimer: null,
-    cancelRequested: false, cancellation: null, cancellationVersion: null, suspended: false };
+    cancelRequested: false, cancellation: null, cancellationVersion: null, suspended: false, restoring: false };
   let view;
   const sharing = createFileSharing(ui, state, { expired, markExpired, responseError, errorMessage,
     fileUrl: url => view.safeFileUrl(url) });
@@ -55,14 +56,52 @@ function initialize() {
   function resetTask() {
     invalidate(); state.xhr?.abort(); state.xhr = null;
     clearTimeout(state.expiryTimer); view.clearResult();
-    state.task = null; state.creation = null; state.cancelRequested = false; state.busy = false;
+    state.task = null; state.creation = null; state.cancelRequested = false; state.busy = false; state.restoring = false;
+    clearStoredTask();
     ui['task-panel'].hidden = true; ui['reconnect-button'].hidden = true;
     view.syncBusy(); view.feedback();
+  }
+  function clearStoredTask() {
+    try { sessionStorage.removeItem(taskStorageKey); } catch { /* Storage can be disabled by the browser. */ }
+  }
+  function saveStoredTask() {
+    if (!state.task) return clearStoredTask();
+    try {
+      sessionStorage.setItem(taskStorageKey, JSON.stringify({
+        id: state.task.id,
+        confirmed: Boolean(state.creation?.confirmed),
+        cancelRequested: state.cancelRequested,
+      }));
+    } catch { /* Current-page task handling remains available without storage. */ }
+  }
+  function readStoredTask() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(taskStorageKey) || 'null');
+      if (!saved || typeof saved.id !== 'string' || !/^[a-f0-9]{32}$/.test(saved.id) ||
+          typeof saved.confirmed !== 'boolean' || typeof saved.cancelRequested !== 'boolean') {
+        clearStoredTask();
+        return null;
+      }
+      return saved;
+    } catch {
+      clearStoredTask();
+      return null;
+    }
+  }
+  function failRestorationAuthentication(error) {
+    if (!state.restoring || !state.task || (error.status !== 401 && error.status !== 403)) return false;
+    state.restoring = false;
+    clearStoredTask();
+    state.creation = null;
+    state.cancelRequested = false;
+    renderTask({ id: state.task.id, state: 'failed', message: errorMessage(error) });
+    return true;
   }
   function expired() { return Boolean(state.task?.expires_at && Date.now() >= state.task.expires_at * 1000); }
   function markExpired() {
     invalidate(); clearTimeout(state.expiryTimer); view.clearResult();
-    state.task = null; state.creation = null; state.busy = false;
+    state.task = null; state.creation = null; state.busy = false; state.restoring = false;
+    clearStoredTask();
     ui['process-steps'].hidden = true; ui['task-heading'].textContent = '结果已过期';
     ui['task-stage'].textContent = '请重新提取'; ui['task-message'].textContent = '任务不存在或已过期，请重新提取。';
     ui['cancel-button'].hidden = true; ui['reconnect-button'].hidden = true; ui['new-task-button'].hidden = false;
@@ -113,12 +152,17 @@ function initialize() {
     try {
       const task = await api(`/api/tasks/${state.task.id}`, { signal: controller.signal });
       if (version !== state.generation) return;
+      state.restoring = false;
       state.creation.confirmed = true;
+      // A status lookup supersedes the original creation response snapshot.
+      state.creation.statusObserved = true;
+      saveStoredTask();
       renderTask(task);
       if (state.cancelRequested && state.busy) { await cancelTask(); return; }
       if (task.state === 'receiving' && state.creation.file) { await sendUpload(state.creation, version); return; }
     } catch (error) {
       if (version !== state.generation) return;
+      if (failRestorationAuthentication(error)) return;
       if (error.status === 404 && wasConfirmed) return markExpired();
       view.disconnected(error.status === 404
         ? '尚未确认任务是否创建。请重新连接确认，或取消处理。'
@@ -176,6 +220,7 @@ function initialize() {
     try {
       const task = await api(operation.path, post(operation.body));
       operation.confirmed = true;
+      saveStoredTask();
       if (state.creation !== operation || state.suspended) return;
       if (state.cancelRequested) {
         // A cancel may have looked up the id before creation reached the server.
@@ -183,13 +228,14 @@ function initialize() {
         if (state.creation === operation && !state.suspended) await cancelTask();
         return;
       }
-      if (version !== state.generation) return;
+      if (version !== state.generation || operation.statusObserved) return;
       renderTask(task);
       if (operation.file && task.state === 'receiving') await sendUpload(operation, version);
       else schedulePoll();
     } catch (error) {
-      if (version !== state.generation || state.suspended || state.creation !== operation) return;
+      if (version !== state.generation || state.suspended || state.creation !== operation || operation.statusObserved) return;
       if (error.status >= 400 && error.status < 500 && error.status !== 408) {
+        clearStoredTask();
         renderTask({ id: state.task.id, state: 'failed', message: errorMessage(error) });
       } else view.disconnected(`${errorMessage(error)} 创建结果未获确认，请重新连接查看原任务，或取消处理。`);
     }
@@ -202,6 +248,7 @@ function initialize() {
       return cancelTask();
     }
     state.cancelRequested = true;
+    saveStoredTask();
     invalidate(); state.xhr?.abort(); view.clearResult();
     const version = state.generation, id = state.task.id;
     const wasConfirmed = state.creation?.confirmed;
@@ -213,6 +260,7 @@ function initialize() {
         if (version === state.generation) renderTask(task);
       } catch (error) {
         if (version !== state.generation) return;
+        if (failRestorationAuthentication(error)) return;
         if (error.status === 404 && wasConfirmed) return markExpired();
         view.disconnected(`取消未获确认。${errorMessage(error)} 可重新连接查看原任务。`);
       } finally { if (state.cancellation === pending) state.cancellation = null; }
@@ -237,8 +285,8 @@ function initialize() {
     state.busy = true;
     const operation = { path: state.mode === 'file' ? '/api/tasks/reservations' : '/api/tasks/link',
       body: state.mode === 'file' ? { task_id: id, filename: file.name.slice(0, 200) } : { task_id: id, share_text: text },
-      file: state.mode === 'file' ? file : null, confirmed: false };
-    state.creation = operation; view.receiving(operation.file);
+      file: state.mode === 'file' ? file : null, confirmed: false, statusObserved: false };
+    state.creation = operation; saveStoredTask(); view.receiving(operation.file);
     await createTask(operation, state.generation);
   });
   document.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => {
@@ -299,5 +347,15 @@ function initialize() {
     else if (state.cancelRequested) void cancelTask();
     else void pollTask();
   });
+  const restored = readStoredTask();
+  if (restored) {
+    state.task = { id: restored.id, state: 'resolving' };
+    state.creation = { confirmed: restored.confirmed, file: null, statusObserved: false };
+    state.cancelRequested = restored.cancelRequested;
+    state.busy = true; state.restoring = true;
+    view.receiving(null);
+    ui['task-message'].textContent = '正在恢复上次任务状态…';
+  }
   void loadCapabilities();
+  if (restored) void pollTask();
 }

@@ -77,8 +77,41 @@ async function main() {
         await page.locator('#source-fields:not([disabled])').waitFor();
         await page.getByRole('button', {name:'本地视频',exact:true}).click();
         await page.locator('#video-file').setInputFiles(source);
+        const reservation = deferred(), releaseReservation = deferred();
+        let uploads = 0;
+        page.on('request', request => {
+          if (/\/api\/tasks\/[a-f0-9]{32}\/upload$/.test(new URL(request.url()).pathname)) uploads++;
+        });
+        await page.route('**/api/tasks/reservations', async route => {
+          let response;
+          try {
+            response = await route.fetch();
+            assert.equal(response.status(),202, await response.text());
+          } catch (error) { reservation.reject(error); await route.abort().catch(() => {}); return; }
+          reservation.resolve((await response.json()).id);
+          await releaseReservation.promise;
+          await route.fulfill({response});
+        });
         await page.getByRole('button', {name:'开始提取',exact:true}).click();
+        const reservedID = await reservation.promise;
+        await page.evaluate(() => window.dispatchEvent(new Event('online')));
         await page.locator('#video-download-button[href]').waitFor({timeout:20000});
+        const originalAudioURL = await page.locator('#download-button').getAttribute('href');
+        const originalVideoURL = await page.locator('#video-download-button').getAttribute('href');
+        const lateReservation = page.waitForResponse(response => response.url().endsWith('/api/tasks/reservations'));
+        releaseReservation.resolve();
+        await (await lateReservation).finished();
+        await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('soundpick.current-task.v1')).confirmed);
+        assert.equal(await page.locator('#result-content').isVisible(),true, 'late creation must keep the completed result');
+        assert.equal(await page.locator('#new-task-button').isVisible(),true);
+        assert.equal(await page.locator('#download-button').getAttribute('href'),originalAudioURL);
+        assert.equal(uploads,1, 'reservation recovery must upload exactly once');
+        assert.equal((await context.request.get(`${base}/api/tasks/${reservedID}`)).status(),200);
+        await page.unroute('**/api/tasks/reservations');
+        await page.reload();
+        await page.locator('#video-download-button[href]').waitFor({timeout:20000});
+        assert.equal(await page.locator('#download-button').getAttribute('href'),originalAudioURL, 'reload must recover the original audio result');
+        assert.equal(await page.locator('#video-download-button').getAttribute('href'),originalVideoURL, 'reload must recover the original video result');
         await page.locator('#audio-player').evaluate(audio => audio.load());
         await page.waitForFunction(() => document.getElementById('audio-player').readyState >= 2);
         const duration = await page.locator('#audio-player').evaluate(audio => audio.duration);
@@ -95,9 +128,15 @@ async function main() {
         await page.getByRole('link', {name:'下载原视频 MP4',exact:true}).click();
         assert.equal((await downloadEvent).suggestedFilename(),'完整视频.mp4');
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        for (const width of [320,768,1440]) {
+          await page.setViewportSize({width,height:812});
+          assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `result overflow at ${width}px`);
+        }
+        await page.setViewportSize({width:375,height:812});
 
         // Delay only delivery of the real 202: the server has already started processing.
         await page.getByRole('button', {name:'提取另一个视频',exact:true}).click();
+        await page.getByRole('button', {name:'本地视频',exact:true}).click();
         const accepted = deferred(), releaseResponse = deferred();
         await page.route('**/api/tasks/*/upload', async route => {
           let response;
@@ -121,7 +160,7 @@ async function main() {
         assert.equal((await taskResponse.json()).state,'cancelled');
         assert.equal(fs.existsSync(path.join(temporary,'data','.soundpick-tasks',taskID)),false);
         assert.deepEqual(errors,[]);
-        console.log(`PASS browser ${iteration+1}/${repeats}: upload, MP3 preview, exact MP4 download, lost-202 cancellation, filesystem cleanup`);
+        console.log(`PASS browser ${iteration+1}/${repeats}: late-202 result protection, single upload, reload recovery, MP3 preview, exact MP4 download, lost-202 cancellation, filesystem cleanup, responsive widths`);
       } finally { await context.close(); }
     }
   } finally {
