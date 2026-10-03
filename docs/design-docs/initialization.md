@@ -1,6 +1,6 @@
 ---
 id: initialization-boundaries
-status: draft
+status: stale
 owner: project
 tags: []
 created: 2026-10-02
@@ -8,6 +8,8 @@ verified: 2026-10-02
 ---
 
 # 初始化实现边界与架构候选
+
+本文保留 `57ba420` 初始化提交时的骨架快照。当前 MVP 已继续实施，以 [MVP 设计](../active/0.1.0/audio-extraction/design.md) 及实际代码为准；不要将以下“当前实现范围”当作最新功能范围。
 
 ## 背景与动机
 
@@ -35,7 +37,7 @@ verified: 2026-10-02
 - 应用通过 `create_app(Settings | None)` 工厂创建；导入模块时不读取运行配置。
 - `app/resolver/base.py`、`douyin.py`、`huoshan.py` 仅提供契约和未配置 stub，不代表能解析真实分享链接。
 
-以上是本次初始化任务提供的实现边界；合并前的实际文件与运行验证由主任务检查并补充。
+以上为初始化阶段的实现边界；该阶段的本地验证已完成，后续 MVP 的实际验证单列于 README。
 
 ## 后续实现清单
 

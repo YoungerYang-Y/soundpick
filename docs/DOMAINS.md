@@ -13,7 +13,7 @@ updated: 2026-10-02
 | 访问与会话 | 共享密码登录、会话与页面访问控制 | `app/main.py`、`app/auth.py`、`app/config.py` | Session、CSRF token |
 | 来源解析 | 识别抖音和火山分享内容并定位原视频媒体 | `app/resolver/` | 分享文本、媒体地址 |
 | 单次媒体任务 | 接收一个链接或上传视频，检查媒体并生成完整音轨 MP3 | `app/services/` | 任务状态、临时输入、临时输出 |
-| 音频交付 | 试听与授权下载结果，任务结束后删除临时文件 | `app/main.py`、`app/services/`（待实现） | 临时 MP3 |
+| 音频交付 | 试听与授权下载结果，到期回收结果文件 | `app/main.py`、`app/services/` | 临时 MP3 |
 | 手机网页 | 链接/文本输入、文件上传、结果播放和保存交互 | `app/templates/`、`app/static/` | 浏览器内的当前操作状态 |
 
 所有媒体数据均为临时数据，产品不维护处理历史或个人账户。

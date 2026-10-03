@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-音拾（soundpick）是供本人和家人使用的手机优先网页，用于从抖音、火山的分享内容或本地视频中取得完整原音轨并保存为 MP3。项目采用 Python 3.12–3.14、FastAPI、Jinja2 与原生 JavaScript；当前仅有登录和页面骨架，提取链路尚未实现。
+音拾（soundpick）是供本人和家人使用的手机优先网页，用于从抖音、火山的分享内容或本地视频中取得完整原音轨并保存为 MP3。项目采用 Python 3.12–3.14、FastAPI、Jinja2 与原生 JavaScript；已实现 MVP 主链路，真实媒体与平台验收仍需核对，不能以缺工具时的跳过测试宣称完整可用。
 
 ## 全局规范
 
@@ -12,7 +12,8 @@
 2. 只改当前任务必要范围，保留已有修改。commit、push、merge、发布和部署均需用户明确要求；初始化仓库不授权这些操作。
 3. 用户要求提交时，使用 Conventional Commits，message 中文：`<type>(<scope>): <中文描述>`。
 4. 需求与实现不一致时，先明确差异；不得仅根据代码把未完成的需求改写为已完成。
-5. Python 使用项目 `.mise.toml` 与 `.venv`；Node 22 仅用于文档工具，无前端构建步骤。
+5. Python 使用项目 `.mise.toml` 与 `.venv`；Node 22 用于文档工具和前端脚本检查，无前端构建步骤。
+6. 仅单进程、单活动任务；任务和文件绑定创建浏览器会话。只从匹配目标 ID 的原视频提取音轨，不能用 music/BGM 代替。媒体工具须真实可运行，平台可解析性单独实网验证。
 
 ## 导航
 
@@ -32,6 +33,7 @@
 - 设计决策：[`docs/design-docs/index.md`](./docs/design-docs/index.md)
 - 已确认需求：[`docs/requirements.md`](./docs/requirements.md)
 - 初始化设计与实现边界：[`docs/design-docs/initialization.md`](./docs/design-docs/initialization.md)
+- MVP 行为、设计与实施：[`docs/active/0.1.0/audio-extraction/plan.md`](./docs/active/0.1.0/audio-extraction/plan.md)
 
 ### C. 参考与产物
 
@@ -57,6 +59,8 @@
 .venv/bin/python -m uvicorn app.main:create_app --factory --reload --host 127.0.0.1 --port 8000
 .venv/bin/python -m pytest
 .venv/bin/python -m ruff check .
+make ui-check
+make runtime-check
 ```
 
 首次启动前运行初始化脚本。登录密码保存在项目根目录 `.env` 的 `APP_PASSWORD`；请自行在本机查看，不要粘贴到聊天或日志。环境准备和运行方式见 [README.md](./README.md)。

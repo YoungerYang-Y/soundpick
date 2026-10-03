@@ -4,7 +4,7 @@
 
 | id | 主题 | status | owner | 适用范围 | 路径 |
 |----|------|--------|-------|----------|------|
-| initialization-boundaries | 初始化实现边界与架构候选 | draft | project | 初始应用骨架、部署与后续媒体处理 | [`initialization.md`](./initialization.md) |
+| initialization-boundaries | 初始化实现边界与架构候选 | stale | project | 初始化提交快照，当前 MVP 见活跃版本 | [`initialization.md`](./initialization.md) |
 
 ## 状态含义
 
