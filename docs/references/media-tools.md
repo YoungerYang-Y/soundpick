@@ -33,4 +33,4 @@ SOUNDPICK_MEDIA_BIN="$PWD/work/tools/ffmpeg-n9.0.2-22-g46d8f462ee-linux64-gpl-9.
 FFMPEG_BIN="$SOUNDPICK_MEDIA_BIN/ffmpeg" FFPROBE_BIN="$SOUNDPICK_MEDIA_BIN/ffprobe" make test
 ```
 
-当前工具的版本和编码能力检查退出码为 0；真实媒体与平台检查范围见 [MVP 验收记录](../active/0.1.0/audio-extraction/acceptance.md)。
+当前工具的版本和编码能力检查退出码为 0；真实媒体与平台检查范围见 [MVP 验收记录](../active/0.1.0/audio-extraction/acceptance.md)。容器使用独立的 Debian 媒体工具，已完成实际构建与运行检查，版本和证据见 [容器验收记录](./container-verification.md)。
