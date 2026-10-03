@@ -305,9 +305,10 @@ class TaskManager:
         try:
             for task in list(self.tasks.values()):
                 await self.cancel(task)
+                task.expires_at = time.time()
                 if not task.deliveries:
                     self._remove(task)
-            self.tasks.clear()
+            self._sweep()
         finally:
             if self.lock:
                 self.lock.close()

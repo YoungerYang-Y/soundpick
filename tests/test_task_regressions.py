@@ -99,3 +99,27 @@ def test_expired_reservation_cannot_receive_before_periodic_cleanup(settings):
             await manager.close()
 
     asyncio.run(exercise())
+
+
+def test_close_keeps_live_deliveries_until_last_release(settings):
+    async def exercise():
+        manager = TaskManager(settings, MediaProcessor(settings), {}, SafeHTTP())
+        await manager.open()
+        task = manager.reserve("owner", "sample", require_media=False)
+        (task.directory / "audio.mp3").write_bytes(b"audio")
+        (task.directory / "video.mp4").write_bytes(b"video")
+        task.video_ready = True
+        manager._finish(task, "ready", "done")
+        manager.acquire_file(task)
+        manager.acquire_file(task, "video")
+        await manager.close()
+        assert task.directory.exists()
+        with pytest.raises(MediaError):
+            manager.get(task.id, "owner")
+        await manager.release_file(task)
+        assert task.directory.exists()
+        await manager.release_file(task)
+        assert not task.directory.exists()
+        assert task.id not in manager.tasks
+
+    asyncio.run(exercise())

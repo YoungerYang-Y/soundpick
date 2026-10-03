@@ -1,8 +1,10 @@
 """HTTP task identity and file lifetime regression checks."""
 
 import asyncio
+import time
 
 from fastapi.testclient import TestClient
+from starlette.responses import FileResponse
 
 from app.main import create_app
 from tests.test_media import make_source, make_tools
@@ -109,6 +111,31 @@ def test_identified_upload_survives_lost_202_and_can_be_cancelled(settings, tmp_
             == "cancelled"
         )
         assert not app.state.tasks.tasks[task_id].directory.exists()
+
+
+def test_file_response_constructor_failure_returns_delivery_reference(
+    settings, tmp_path, monkeypatch
+):
+    configured = make_tools(settings, tmp_path)
+    app = create_app(configured)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        headers = {"X-CSRF-Token": login(client, configured)}
+        response = client.post(
+            "/api/tasks/upload", content=make_source(tmp_path).read_bytes(), headers=headers
+        )
+        value = wait_terminal(client, response.json()["id"])
+        task = app.state.tasks.tasks[value["id"]]
+
+        def broken_constructor(*args, **kwargs):
+            raise OSError("isolated response construction failure")
+
+        monkeypatch.setattr(FileResponse, "__init__", broken_constructor)
+        assert client.get(value["download_url"]).status_code == 500
+        assert task.deliveries == 0
+        task.expires_at = time.time() - 1
+        client.portal.call(app.state.tasks.sweep)
+        assert not task.directory.exists()
+        assert task.id not in app.state.tasks.tasks
 
 
 def test_identified_upload_counts_actual_bytes_with_false_declared_length(settings, tmp_path):

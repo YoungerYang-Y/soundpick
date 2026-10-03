@@ -270,14 +270,18 @@ def create_app(
     ):
         task = tasks.get(task_id, authorized(request))
         path = tasks.acquire_file(task, kind)
-        response = ProtectedFileResponse(
-            path,
-            media_type=ARTIFACTS[kind].media_type,
-            filename=download_filename(task.title, kind),
-            content_disposition_type="attachment"
-            if download or ARTIFACTS[kind].force_attachment
-            else "inline",
-        )
+        try:
+            response = ProtectedFileResponse(
+                path,
+                media_type=ARTIFACTS[kind].media_type,
+                filename=download_filename(task.title, kind),
+                content_disposition_type="attachment"
+                if download or ARTIFACTS[kind].force_attachment
+                else "inline",
+            )
+        except BaseException:
+            await tasks.release_file(task)
+            raise
         response.media_task = task
         return response
 
