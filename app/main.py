@@ -1,10 +1,14 @@
 """ASGI application factory; importing modules does not require credentials."""
 
 import secrets
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
+from typing import TypeVar
 
 from fastapi import FastAPI, Query, Request
+from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
@@ -20,28 +24,37 @@ from app.auth import (
 )
 from app.config import Settings
 from app.middleware import BodyLimitMiddleware
-from app.resolver.douyin import DouyinResolver
-from app.resolver.huoshan import HuoshanResolver
-from app.resolver.registry import extract_share_url
+from app.resolver.registry import PlatformSpec, build_resolvers, extract_share_url, platform_of
 from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
 from app.services.errors import MediaError
 from app.services.media import MediaProcessor
 from app.services.network import SafeHTTP
-from app.services.tasks import TaskManager
+from app.services.tasks import Task, TaskManager
 
 APP_DIR = Path(__file__).resolve().parent
+InputModel = TypeVar("InputModel", bound=BaseModel)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+class UploadReservation(BaseModel):
+    task_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    filename: str = Field(default="本地视频", max_length=200)
+
+
+class LinkSubmission(BaseModel):
+    share_text: str = Field(min_length=1, max_length=4096)
+    task_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+
+
+def create_app(
+    settings: Settings | None = None, *, platforms: Sequence[PlatformSpec] | None = None
+) -> FastAPI:
     settings = settings or Settings()
     network = SafeHTTP()
-    token = settings.parser_api_token.get_secret_value()
-    resolvers = {
-        "douyin": DouyinResolver(network, settings.douyin_parser_url, token),
-        "huoshan": HuoshanResolver(network, settings.huoshan_parser_url, token),
-    }
+    resolvers = build_resolvers(settings, network, specs=platforms)
     media = MediaProcessor(settings)
-    tasks = TaskManager(settings, media, resolvers, network)
+    tasks = TaskManager(
+        settings, media, resolvers, network, select_platform=partial(platform_of, specs=platforms)
+    )
 
     @asynccontextmanager
     async def lifespan(app):
@@ -186,11 +199,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
-    @app.post("/api/tasks/upload", status_code=202)
-    async def upload(request: Request, filename: str = Query(default="本地视频", max_length=200)):
-        owner = authorized(request, write=True)
-        title = Path(filename.replace("\\", "/")).stem or "本地视频"
-        task = tasks.reserve(owner, title)
+    async def json_input(request: Request, model: type[InputModel]) -> InputModel:
+        try:
+            return model.model_validate(await request.json())
+        except (ValueError, ValidationError):
+            raise MediaError(
+                "请求格式无效，请检查分享内容或任务标识", "invalid_input", 400
+            ) from None
+
+    async def receive_upload(task: Task, request: Request) -> dict:
         try:
             await tasks.receive(task, request.stream())
         except TimeoutError:
@@ -198,16 +215,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tasks.start(task)
         return tasks.view(task)
 
+    @app.post("/api/tasks/reservations", status_code=202)
+    async def reserve_upload(request: Request):
+        owner = authorized(request, write=True)
+        value = await json_input(request, UploadReservation)
+        title = Path(value.filename.replace("\\", "/")).stem or "本地视频"
+        task = tasks.reserve(owner, title, task_id=value.task_id)
+        return tasks.view(task)
+
+    @app.post("/api/tasks/{task_id}/upload", status_code=202)
+    async def identified_upload(task_id: str, request: Request):
+        task = tasks.get(task_id, authorized(request, write=True))
+        return await receive_upload(task, request)
+
+    @app.post("/api/tasks/upload", status_code=202)
+    async def upload(request: Request, filename: str = Query(default="本地视频", max_length=200)):
+        owner = authorized(request, write=True)
+        title = Path(filename.replace("\\", "/")).stem or "本地视频"
+        return await receive_upload(tasks.reserve(owner, title), request)
+
     @app.post("/api/tasks/link", status_code=202)
     async def share_link(request: Request):
         owner = authorized(request, write=True)
-        try:
-            value = await request.json()
-        except ValueError:
-            raise MediaError("分享内容格式无效", "invalid_input", 400) from None
-        _, url = extract_share_url(value.get("share_text") if isinstance(value, dict) else None)
-        task = tasks.reserve(owner, "音拾音频")
-        tasks.start(task, url)
+        value = await json_input(request, LinkSubmission)
+        _, url = extract_share_url(value.share_text, specs=platforms)
+        task = tasks.reserve(owner, "音拾音频", task_id=value.task_id)
+        if task.state == "receiving" and task.runner is None:
+            tasks.start(task, url)
         return tasks.view(task)
 
     @app.get("/api/tasks/{task_id}")

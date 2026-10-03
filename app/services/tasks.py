@@ -7,9 +7,10 @@ import re
 import secrets
 import shutil
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from app.config import Settings
 from app.resolver.base import MediaResolver
@@ -19,6 +20,9 @@ from app.services.errors import MediaError
 from app.services.media import MediaProcessor
 from app.services.network import SafeHTTP
 
+TaskState = Literal[
+    "receiving", "resolving", "downloading", "converting", "ready", "failed", "cancelled"
+]
 TERMINAL = {"ready", "failed", "cancelled"}
 
 
@@ -28,13 +32,14 @@ class Task:
     owner: str
     directory: Path
     title: str
-    state: str = "receiving"
+    state: TaskState = "receiving"
     message: str = "正在接收视频"
     author: str = ""
     duration: float | None = None
     expires_at: float | None = None
     runner: asyncio.Task | None = None
     cancellation: asyncio.Task[None] | None = None
+    receive_deadline: float | None = None
     deliveries: int = 0
     cleanup_pending: bool = False
     video_ready: bool = False
@@ -48,11 +53,14 @@ class TaskManager:
         media: MediaProcessor,
         resolvers: dict[str, MediaResolver],
         network: SafeHTTP,
+        *,
+        select_platform: Callable[[str], str] = platform_of,
     ) -> None:
         self.settings = settings
         self.media = media
         self.resolvers = resolvers
         self.network = network
+        self.select_platform = select_platform
         self.root = settings.data_dir / ".soundpick-tasks"
         self.tasks: dict[str, Task] = {}
         self.cleaner: asyncio.Task | None = None
@@ -102,6 +110,13 @@ class TaskManager:
     def _sweep(self) -> None:
         now = time.time()
         for task in list(self.tasks.values()):
+            if (
+                task.state == "receiving"
+                and task.runner is None
+                and task.receive_deadline is not None
+                and task.receive_deadline <= now
+            ):
+                self._finish(task, "failed", "上传预约已过期，请重新选择视频")
             if task.cleanup_pending and not task.deliveries:
                 self._remove(task)
             if task.expires_at is not None and task.expires_at <= now and not task.deliveries:
@@ -112,7 +127,14 @@ class TaskManager:
     async def sweep(self) -> None:
         self._sweep()
 
-    def reserve(self, owner: str, title: str, *, require_media: bool = True) -> Task:
+    def reserve(
+        self, owner: str, title: str, *, require_media: bool = True, task_id: str | None = None
+    ) -> Task:
+        if task_id is not None and not re.fullmatch(r"[a-f0-9]{32}", task_id):
+            raise MediaError("任务标识格式无效", "invalid_input", 400)
+        self._sweep()
+        if task_id in self.tasks:
+            return self.get(task_id, owner)
         if require_media and not self.media.available:
             raise MediaError("媒体处理工具未就绪，请联系管理员", "media_unavailable", 503)
         self._sweep()
@@ -120,17 +142,20 @@ class TaskManager:
             raise MediaError("正在处理一个视频，请完成后再试", "busy", 409)
         if len(self.tasks) >= self.settings.max_retained_tasks:
             raise MediaError("临时结果已满，请等待旧结果到期后再试", "capacity", 409)
-        task_id = secrets.token_hex(16)
+        task_id = task_id or secrets.token_hex(16)
         directory = self.root / task_id
         try:
             directory.mkdir(mode=0o700)
         except OSError:
             raise MediaError("临时存储不可用，请稍后重试", "storage_error", 503) from None
+        title = title.encode("utf-8", errors="replace").decode("utf-8")
         task = Task(task_id, owner, directory, title[:1000])
+        task.receive_deadline = time.time() + self.settings.upload_timeout_seconds
         self.tasks[task.id] = task
         return task
 
     def get(self, task_id: str, owner: str) -> Task:
+        self._sweep()
         task = self.tasks.get(task_id)
         if (
             task is None
@@ -169,6 +194,9 @@ class TaskManager:
             self._remove(task)
 
     async def receive(self, task: Task, stream: AsyncIterator[bytes]) -> None:
+        self._sweep()
+        if task.state != "receiving" or task.runner is not None:
+            raise MediaError("任务不再接收视频，请查看原任务状态", "not_receiving", 409)
         task.runner = asyncio.current_task()
         try:
             count = 0
@@ -192,6 +220,8 @@ class TaskManager:
             task.runner = None
 
     def start(self, task: Task, share_url: str | None = None) -> None:
+        if task.state != "receiving" or task.runner is not None:
+            raise MediaError("任务已启动或停止，请查看原任务状态", "already_started", 409)
         task.state = "resolving" if share_url else "converting"
         task.message = "正在解析分享链接" if share_url else "正在提取完整音轨"
         task.runner = asyncio.create_task(self._run(task, share_url))
@@ -200,7 +230,7 @@ class TaskManager:
         try:
             async with asyncio.timeout(self.settings.task_timeout_seconds):
                 if share_url:
-                    video = await self.resolvers[platform_of(share_url)].resolve(share_url)
+                    video = await self.resolvers[self.select_platform(share_url)].resolve(share_url)
                     task.title = video.title or "音拾音频"
                     task.author = video.author
                     task.state, task.message = "downloading", "正在下载原视频"

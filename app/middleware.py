@@ -1,5 +1,7 @@
 """Early request boundaries; only the raw upload route has a streaming budget."""
 
+import re
+
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -17,7 +19,10 @@ class BodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
-        upload = scope["path"] == "/api/tasks/upload" and scope["method"] == "POST"
+        upload = scope["method"] == "POST" and (
+            scope["path"] == "/api/tasks/upload"
+            or re.fullmatch(r"/api/tasks/[a-f0-9]{32}/upload", scope["path"]) is not None
+        )
         limit = self.upload_max_bytes if upload else self.max_bytes
         raw_length = headers.get(b"content-length")
         if raw_length is not None:
