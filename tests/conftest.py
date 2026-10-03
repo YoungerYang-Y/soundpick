@@ -6,12 +6,13 @@ from app.main import create_app
 
 
 @pytest.fixture
-def settings():
+def settings(tmp_path):
     return Settings(
         app_password="家庭共享测试口令123456",
         session_secret="test-key-" * 8,
         app_env="local",
         cookie_secure=False,
+        data_dir=tmp_path / "data",
         _env_file=None,
     )
 
@@ -20,3 +21,19 @@ def settings():
 def client(settings):
     with TestClient(create_app(settings), follow_redirects=False) as client:
         yield client
+
+
+@pytest.fixture
+def real_tools(settings):
+    import os
+    import shutil
+
+    configured = settings.model_copy(
+        update={
+            "ffmpeg_bin": os.environ.get("FFMPEG_BIN", settings.ffmpeg_bin),
+            "ffprobe_bin": os.environ.get("FFPROBE_BIN", settings.ffprobe_bin),
+        }
+    )
+    if not shutil.which(configured.ffmpeg_bin) or not shutil.which(configured.ffprobe_bin):
+        pytest.skip("真实FFmpeg/FFprobe尚未提供，不能证明转码验收")
+    return configured
