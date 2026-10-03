@@ -12,6 +12,7 @@ from app.services.errors import MediaError
 
 _PROBE_OUTPUT_LIMIT = 64 * 1024
 _MAX_STREAMS = 128
+_READINESS_TIMEOUT = 10
 
 
 class MediaProcessor:
@@ -19,10 +20,47 @@ class MediaProcessor:
         self.settings = settings
         self.ffmpeg = shutil.which(settings.ffmpeg_bin)
         self.ffprobe = shutil.which(settings.ffprobe_bin)
+        self.readiness_error: str | None = None
+        self.versions: dict[str, str] = {}
 
     @property
     def available(self) -> bool:
-        return bool(self.ffmpeg and self.ffprobe)
+        return bool(self.ffmpeg and self.ffprobe and self.readiness_error is None)
+
+    async def check_readiness(self) -> bool:
+        """Cache bounded runtime checks before accepting application tasks."""
+        self.readiness_error = "媒体工具未通过运行检查"
+        self.versions = {}
+        if not self.ffmpeg or not self.ffprobe:
+            self.readiness_error = "FFmpeg/FFprobe 未就绪，请安装系统工具或配置工具路径。"
+            return False
+        name = "FFmpeg"
+        versions = {}
+        try:
+            async with asyncio.timeout(_READINESS_TIMEOUT):
+                for name, executable in (("FFmpeg", self.ffmpeg), ("FFprobe", self.ffprobe)):
+                    output = await self._run(executable, "-version", capture=True)
+                    lines = output.decode("utf-8", errors="replace").splitlines()
+                    if not lines or not lines[0].lower().startswith(f"{name.lower()} version "):
+                        raise MediaError("工具版本无效", "media_unavailable", 503)
+                    versions[name] = lines[0]
+                name = "FFmpeg"
+                output = await self._run(self.ffmpeg, "-hide_banner", "-encoders", capture=True)
+                encoders = [
+                    line.split() for line in output.decode("utf-8", errors="replace").splitlines()
+                ]
+                if not any(
+                    len(fields) >= 2 and fields[0].startswith("A") and fields[1] == "libmp3lame"
+                    for fields in encoders
+                ):
+                    self.readiness_error = "FFmpeg 缺少 libmp3lame，不能生成 MP3。"
+                    return False
+        except (OSError, MediaError, TimeoutError):
+            self.readiness_error = f"{name} 无法运行、信息无效或检查超时。"
+            return False
+        self.versions = versions
+        self.readiness_error = None
+        return True
 
     async def extract_audio(self, source: Path, target: Path) -> float:
         # A caller error must never cause the input to be removed by output cleanup.

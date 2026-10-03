@@ -58,6 +58,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app):
+        await media.check_readiness()
         await tasks.open()
         try:
             yield

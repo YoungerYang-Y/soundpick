@@ -25,7 +25,8 @@ def test_real_http_cancel_reaps_ffmpeg_and_allows_retry(real_tools, tmp_path):
 import os, pathlib, sys
 pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))
 args = sys.argv[1:]
-args.insert(args.index("-i"), "-re")
+if "-i" in args:
+    args.insert(args.index("-i"), "-re")
 os.execv({executable!r}, [{executable!r}, *args])
 """)
     wrapper.chmod(0o700)

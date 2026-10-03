@@ -61,7 +61,16 @@ pathlib.Path(sys.argv[-1]).write_bytes(b"ID3test")
 """
     for name, code in (("probe", probe_code), ("convert", convert_code)):
         tool = tmp_path / name
-        tool.write_text(f"#!{sys.executable}\n{code}")
+        readiness = (
+            "import sys\n"
+            "if '-version' in sys.argv:\n"
+            f"    print('{'ffprobe' if name == 'probe' else 'ffmpeg'} version test')\n"
+            "    sys.exit(0)\n"
+            "if '-encoders' in sys.argv:\n"
+            "    print(' A....D libmp3lame Test encoder')\n"
+            "    sys.exit(0)\n"
+        )
+        tool.write_text(f"#!{sys.executable}\n{readiness}{code}")
         tool.chmod(0o700)
     return settings.model_copy(
         update={"ffmpeg_bin": str(tmp_path / "convert"), "ffprobe_bin": str(tmp_path / "probe")}

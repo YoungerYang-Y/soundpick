@@ -31,7 +31,7 @@ async function main() {
     assert.ok(realFFmpeg, 'FFmpeg must be available');
     execFileSync(realFFmpeg, ['-nostdin','-v','error','-f','lavfi','-i','color=c=red:s=160x120:r=10:d=3','-f','lavfi','-i','sine=frequency=440:duration=3','-c:v','mpeg4','-c:a','aac',source], {timeout:15000});
     const paced = path.join(temporary, 'paced-ffmpeg');
-    fs.writeFileSync(paced, `#!${python}\nimport os,sys\nargs=sys.argv[1:]\nargs.insert(args.index('-i'), '-re')\nos.execv(${JSON.stringify(realFFmpeg)},[${JSON.stringify(realFFmpeg)},*args])\n`, {mode:0o700});
+    fs.writeFileSync(paced, `#!${python}\nimport os,sys\nargs=sys.argv[1:]\nif '-i' in args: args.insert(args.index('-i'), '-re')\nos.execv(${JSON.stringify(realFFmpeg)},[${JSON.stringify(realFFmpeg)},*args])\n`, {mode:0o700});
     const port = await freePort();
     const base = `http://127.0.0.1:${port}`;
     const password = 'isolated-browser-test-password';
