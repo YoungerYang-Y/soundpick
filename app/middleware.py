@@ -1,19 +1,24 @@
-"""Small-body boundary for the bootstrap routes; uploads are not enabled yet."""
+"""Early request boundaries; only the raw upload route has a streaming budget."""
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.services.errors import MediaError
+
 
 class BodyLimitMiddleware:
-    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+    def __init__(self, app: ASGIApp, max_bytes: int, upload_max_bytes: int | None = None) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.upload_max_bytes = upload_max_bytes or max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
+        upload = scope["path"] == "/api/tasks/upload" and scope["method"] == "POST"
+        limit = self.upload_max_bytes if upload else self.max_bytes
         raw_length = headers.get(b"content-length")
         if raw_length is not None:
             try:
@@ -25,11 +30,25 @@ class BodyLimitMiddleware:
                     scope, receive, send
                 )
                 return
-            if declared_length > self.max_bytes:
+            if declared_length > limit:
                 await JSONResponse({"detail": "请求内容过大"}, status_code=413)(
                     scope, receive, send
                 )
                 return
+
+        if upload:
+            received = 0
+
+            async def bounded_receive() -> dict:
+                nonlocal received
+                message = await receive()
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise MediaError("视频超过文件大小限制", "size_limit", 413)
+                return message
+
+            await self.app(scope, bounded_receive, send)
+            return
 
         messages = []
         total = 0

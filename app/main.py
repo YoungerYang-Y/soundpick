@@ -1,10 +1,12 @@
 """ASGI application factory; importing modules does not require credentials."""
 
+import secrets
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
@@ -20,15 +22,44 @@ from app.config import Settings
 from app.middleware import BodyLimitMiddleware
 from app.resolver.douyin import DouyinResolver
 from app.resolver.huoshan import HuoshanResolver
+from app.resolver.registry import extract_share_url
+from app.services.errors import MediaError
+from app.services.media import MediaProcessor
+from app.services.network import SafeHTTP
+from app.services.tasks import TaskManager, download_filename
 
 APP_DIR = Path(__file__).resolve().parent
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
-    app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None, openapi_url=None)
+    network = SafeHTTP()
+    token = settings.parser_api_token.get_secret_value()
+    resolvers = {
+        "douyin": DouyinResolver(network, settings.douyin_parser_url, token),
+        "huoshan": HuoshanResolver(network, settings.huoshan_parser_url, token),
+    }
+    media = MediaProcessor(settings)
+    tasks = TaskManager(settings, media, resolvers, network)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        await tasks.open()
+        try:
+            yield
+        finally:
+            await tasks.close()
+
+    app = FastAPI(
+        title=settings.app_name, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
+    )
     app.state.settings = settings
-    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_body_bytes)
+    app.state.tasks = tasks
+    app.add_middleware(
+        BodyLimitMiddleware,
+        max_bytes=settings.max_body_bytes,
+        upload_max_bytes=settings.max_media_bytes,
+    )
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret.get_secret_value(),
@@ -40,7 +71,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=APP_DIR / "templates")
     limiter = LoginLimiter()
-    resolvers = (DouyinResolver(), HuoshanResolver())
+
+    def authorized(request: Request, *, write: bool = False) -> str:
+        if not is_authenticated(request, settings) or not request.session.get("owner"):
+            raise MediaError("请先登录", "unauthorized", 401)
+        if write and not valid_csrf(request, request.headers.get("x-csrf-token")):
+            raise MediaError("页面已过期，请刷新后再试", "csrf", 403)
+        return request.session["owner"]
+
+    @app.exception_handler(MediaError)
+    async def media_error(request: Request, exc: MediaError) -> Response:
+        return JSONResponse({"detail": exc.message, "code": exc.code}, status_code=exc.status)
 
     def render_login(request: Request, error: str | None = None, status: int = 200) -> Response:
         return templates.TemplateResponse(
@@ -96,6 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return render_login(request, "口令不正确，请重试。", 401)
         request.session.clear()
         request.session["authenticated"] = session_fingerprint(settings)
+        request.session["owner"] = secrets.token_hex(16)
         csrf_token(request)
         return RedirectResponse("/", status_code=303)
 
@@ -119,17 +161,82 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/capabilities")
     async def capabilities(request: Request) -> Response:
-        if not is_authenticated(request, settings):
-            return JSONResponse({"detail": "请先登录"}, status_code=401)
+        authorized(request)
         return JSONResponse(
             {
-                "extraction_available": False,
+                "extraction_available": media.available,
+                "media_available": media.available,
                 "planned_inputs": ["share_text", "video_upload"],
                 "platforms": [
-                    {"id": r.platform, "name": r.display_name, "available": r.available}
-                    for r in resolvers
+                    {
+                        "id": r.platform,
+                        "name": r.display_name,
+                        "available": r.available,
+                        "configured": r.available,
+                    }
+                    for r in resolvers.values()
                 ],
+                "limits": {
+                    "max_media_bytes": settings.max_media_bytes,
+                    "max_duration_seconds": settings.max_duration_seconds,
+                    "result_ttl_seconds": settings.result_ttl_seconds,
+                    "upload_timeout_seconds": settings.upload_timeout_seconds,
+                },
             }
         )
+
+    @app.post("/api/tasks/upload", status_code=202)
+    async def upload(request: Request, filename: str = Query(default="本地视频", max_length=200)):
+        owner = authorized(request, write=True)
+        title = Path(filename.replace("\\", "/")).stem or "本地视频"
+        task = tasks.reserve(owner, title)
+        try:
+            await tasks.receive(task, request.stream())
+        except TimeoutError:
+            raise MediaError("上传超时，请重新选择视频", "upload_timeout", 408) from None
+        tasks.start(task)
+        return tasks.view(task)
+
+    @app.post("/api/tasks/link", status_code=202)
+    async def share_link(request: Request):
+        owner = authorized(request, write=True)
+        try:
+            value = await request.json()
+        except ValueError:
+            raise MediaError("分享内容格式无效", "invalid_input", 400) from None
+        _, url = extract_share_url(value.get("share_text") if isinstance(value, dict) else None)
+        task = tasks.reserve(owner, "音拾音频")
+        tasks.start(task, url)
+        return tasks.view(task)
+
+    @app.get("/api/tasks/{task_id}")
+    async def task_status(task_id: str, request: Request):
+        return tasks.view(tasks.get(task_id, authorized(request)))
+
+    @app.post("/api/tasks/{task_id}/cancel")
+    async def cancel_task(task_id: str, request: Request):
+        task = tasks.get(task_id, authorized(request, write=True))
+        await tasks.cancel(task)
+        return tasks.view(task)
+
+    class ProtectedFileResponse(FileResponse):
+        async def __call__(self, scope, receive, send):
+            try:
+                await super().__call__(scope, receive, send)
+            finally:
+                await tasks.release_file(self.media_task)
+
+    @app.api_route("/files/{task_id}", methods=["GET", "HEAD"])
+    async def audio_file(task_id: str, request: Request, download: bool = False):
+        task = tasks.get(task_id, authorized(request))
+        path = tasks.acquire_file(task)
+        response = ProtectedFileResponse(
+            path,
+            media_type="audio/mpeg",
+            filename=download_filename(task.title),
+            content_disposition_type="attachment" if download else "inline",
+        )
+        response.media_task = task
+        return response
 
     return app
