@@ -8,6 +8,8 @@ services:
       - .env
     environment:
       DATA_DIR: /app/data
+      FFMPEG_BIN: ffmpeg
+      FFPROBE_BIN: ffprobe
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     volumes:
