@@ -69,4 +69,4 @@ docker compose up --build
 
 Compose 读取 `.env`，默认绑定 `127.0.0.1:8000`，使用命名数据卷、非 root 用户、单应用进程和日志轮转。镜像安装 FFmpeg/FFprobe；Compose 的 `environment` 显式指定 `ffmpeg`、`ffprobe`，覆盖 `.env` 的 WSL 专属工具路径。对外部署前需要 HTTPS 入口，并设置 `APP_ENV=production`、`COOKIE_SECURE=true`。通过手机访问非 HTTPS 的局域网地址时，文件分享和剪贴板能力可能不可用，下载入口仍存在。
 
-当前 WSL Docker 客户端启动时报 I/O 错误；Compose 的两项路径覆盖仅通过 YAML 解析与语义差异检查，容器构建与运行尚未验证。MVP 已按用户授权分阶段本地提交，尚未配置远端、推送或部署。
+2026-10-03 已通过 Windows Docker CLI 连接 Docker Desktop 的 Linux 引擎，成功构建并实际运行当前镜像；非 root、只读根文件系统、本地视频及火山分享的真实转码、附件、Range 和到期清理通过。独立验收容器与测试数据卷已移除，镜像保留，详情见 [容器验收记录](docs/references/container-verification.md)。WSL 默认 Unix socket 仍拒绝连接，未修改 Desktop 集成设置；从当前 WSL 调用可用的 Windows CLI 可使用 `"/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe" compose up --build`。MVP 已按用户授权分阶段本地提交，尚未配置远端、推送或部署。
