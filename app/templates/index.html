@@ -19,7 +19,7 @@
     <div class="page-heading">
       <p class="eyebrow">简单整理，随时收听</p>
       <h1 id="page-title">把视频里的声音带走</h1>
-      <p class="intro">每次处理一个视频，提取完整原音轨，试听后保存为 MP3。</p>
+      <p class="intro">每次处理一个视频，提取完整原音轨并试听；原视频可用时也能保存为 MP4。</p>
     </div>
 
     <section class="panel source-panel" aria-labelledby="source-title">
@@ -82,6 +82,8 @@
         <p class="result-meta" id="result-meta"></p>
         <audio id="audio-player" controls preload="none" aria-label="提取后的完整音轨"></audio>
         <a class="button button--primary button--full" id="download-button">下载 MP3</a>
+        <a class="button button--primary button--full" id="video-download-button" hidden>下载原视频 MP4</a>
+        <p class="field-help video-feedback" id="video-feedback" role="status" aria-live="polite"></p>
         <div class="share-actions">
           <button class="button button--quiet button--full" id="prepare-share" type="button" hidden>准备分享文件</button>
           <button class="button button--quiet button--full" id="share-button" type="button" hidden>打开系统分享</button>
@@ -90,8 +92,8 @@
         <p class="expiry-note" id="expiry-note"></p>
         <div class="save-guide">
           <h3>保存到手机</h3>
-          <p><strong>iPhone：</strong>下载后在 Safari 的下载列表中打开，可在分享菜单中选择“存储到文件”，到“文件”App 中查找。</p>
-          <p><strong>Android：</strong>在浏览器下载列表或文件管理器的“下载”目录中查找。系统分享的可用目标由手机决定。</p>
+          <p><strong>iPhone：</strong>MP3 和 MP4 下载后都可在 Safari 的下载列表中打开，再选择“存储到文件”，到“文件”App 中查找。</p>
+          <p><strong>Android：</strong>MP3 和 MP4 可在浏览器下载列表或文件管理器的“下载”目录中查找。系统分享的可用目标由手机决定。</p>
         </div>
       </div>
       <div class="task-actions">

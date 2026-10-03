@@ -55,8 +55,10 @@ class XHR extends Element {
 }
 const navigator = { clipboard: { readText: async () => { throw new Error('denied'); } },
   canShare: () => true, share: async data => { shares.push(data); throw Object.assign(new Error('cancelled'), { name: 'AbortError' }); } };
+let mockedNow = Date.now();
+class ControlledDate extends Date { static now() { return mockedNow; } }
 vm.runInNewContext(fs.readFileSync('app/static/app.js', 'utf8'), {
-  document, window, navigator, fetch, File, Response, URL, XMLHttpRequest: XHR, AbortController,
+  document, window, navigator, fetch, File, Response, URL, Date: ControlledDate, XMLHttpRequest: XHR, AbortController,
   setTimeout: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, ms }); return id; }, clearTimeout: id => timers.delete(id), console,
 });
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -75,11 +77,18 @@ async function fireTimer(ms) { const entry = [...timers].find(([,t]) => t.ms ===
   queue(`/api/tasks/${'a'.repeat(32)}`, new TypeError('offline'));
   await fireTimer(1800); assert.equal(elements['reconnect-button'].hidden, false);
   assert.equal(elements['source-fields'].disabled, true); // Preserve active task across disconnect.
-  queue(`/api/tasks/${'a'.repeat(32)}`, task('ready'));
+  // A ready task may expose a same-origin MP4 download independently from MP3 sharing.
+  const videoUrl = `/files/${'a'.repeat(32)}?kind=video&download=1`;
+  queue(`/api/tasks/${'a'.repeat(32)}`, task('ready', {
+    video_download_url: videoUrl, video_filename: '来源.mp4', video_message: '',
+  }));
   await click('reconnect-button'); await flush();
   assert.equal(elements['task-heading'].textContent, '<b>来源标题</b>');
   assert.match(elements['result-meta'].textContent, /<img src=x>/);
   assert.equal(elements['result-content'].hidden, false); assert.equal(elements['prepare-share'].hidden, false);
+  assert.equal(elements['video-download-button'].hidden, false);
+  assert.equal(elements['video-download-button'].href, `http://localhost${videoUrl}`);
+  assert.equal(elements['video-feedback'].textContent, '');
   assert.equal(shares.length, 0);
   queue(`http://localhost/files/${'a'.repeat(32)}?download=1`, new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Length': '3' } }));
   await click('prepare-share'); assert.equal(elements['share-button'].hidden, false); assert.equal(shares.length, 0);
@@ -88,6 +97,8 @@ async function fireTimer(ms) { const entry = [...timers].find(([,t]) => t.ms ===
   const expiry = [...timers].find(([, t]) => t.ms > 1000000); assert.ok(expiry);
   timers.delete(expiry[0]); expiry[1].fn();
   assert.equal(elements['result-content'].hidden, true); assert.equal(elements['download-button'].href, undefined);
+  assert.equal(elements['video-download-button'].hidden, true);
+  assert.equal(elements['video-download-button'].href, undefined);
   assert.match(elements['task-message'].textContent, /过期/);
   await click('new-task-button'); await modes[1].trigger('click');
   const file = new File(['1234'], '测试视频.mp4', { type: 'video/mp4' }); elements['video-file'].files = [file];
@@ -118,6 +129,37 @@ async function fireTimer(ms) { const entry = [...timers].find(([,t]) => t.ms ===
   queue('/api/tasks/link', task('ready')); await submit();
   assert.equal(elements['prepare-share'].hidden, true);
   assert.match(elements['share-feedback'].textContent, /不支持文件分享/);
-  assert.equal(routes.length, 0);
-  console.log('PASS: capabilities, validation, clipboard fallback, retained-task reconnection, safe text, two-step file share, share cancellation, expiry cleanup, raw upload progress/cancellation, size limit, late-abort cancellation race and insecure-origin sharing fallback');
+  assert.equal(elements['video-download-button'].hidden, true); // Older TaskView remains MP3-compatible.
+  assert.match(elements['video-feedback'].textContent, /原视频暂无法保存为 MP4，MP3 仍可下载/);
+  await click('new-task-button'); window.isSecureContext = true;
+  queue('/api/tasks/link', task('ready', { video_download_url: 'https://evil.example/files/x?kind=video&download=1' }));
+  await submit();
+  assert.equal(elements['video-download-button'].hidden, true);
+  assert.equal(elements['video-download-button'].href, undefined);
+  assert.equal(elements['download-button'].href, `http://localhost/files/${'a'.repeat(32)}?download=1`);
+  assert.match(elements['video-feedback'].textContent, /原视频暂无法保存为 MP4，MP3 仍可下载/);
+  await click('new-task-button');
+  const expiringVideoTask = task('ready', { video_download_url: videoUrl, video_filename: '来源.mp4', video_message: '' });
+  queue('/api/tasks/link', expiringVideoTask);
+  await submit();
+  assert.equal(elements['video-download-button'].hidden, false);
+  mockedNow = (expiringVideoTask.expires_at * 1000) + 1;
+  let expiryClickPrevented = false;
+  await elements['video-download-button'].trigger('click', { preventDefault() { expiryClickPrevented = true; } });
+  assert.equal(expiryClickPrevented, true);
+  assert.equal(elements['video-download-button'].hidden, true);
+  assert.equal(elements['video-download-button'].href, undefined);
+  await click('new-task-button');
+  assert.equal(elements['video-download-button'].hidden, true);
+  assert.equal(elements['video-download-button'].href, undefined);
+  mockedNow = Date.now();
+  queue('/api/tasks/link', task('resolving')); await submit();
+  queue(`/api/tasks/${'a'.repeat(32)}/cancel`, task('cancelled', {
+    video_download_url: videoUrl, video_filename: '来源.mp4', video_message: '',
+  }));
+  await click('cancel-button');
+  assert.equal(elements['video-download-button'].hidden, true);
+  assert.equal(elements['video-download-button'].href, undefined);
+  assert.equal(routes.length, 0, JSON.stringify(routes.map(route => route.path)));
+  console.log('PASS: capabilities, validation, clipboard fallback, retained-task reconnection, safe text, MP3 sharing and cancellation, expiry cleanup, MP4 same-origin/unavailable/new-task/cancel cleanup, raw upload progress/cancellation, size limit, late-abort cancellation race and insecure-origin sharing fallback');
 })().catch(error => { console.error(error); process.exitCode = 1; });

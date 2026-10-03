@@ -8,8 +8,9 @@
     "limits-note", "platforms-note", "availability", "availability-message",
     "retry-capabilities", "form-feedback", "task-panel", "task-heading", "task-stage",
     "task-message", "upload-progress", "upload-bar", "upload-label", "result-content",
-    "result-meta", "audio-player", "download-button", "prepare-share", "share-button",
-    "share-feedback", "expiry-note", "cancel-button", "reconnect-button", "new-task-button",
+    "result-meta", "audio-player", "download-button", "video-download-button", "video-feedback",
+    "prepare-share", "share-button", "share-feedback", "expiry-note", "cancel-button",
+    "reconnect-button", "new-task-button",
     "file-details", "process-steps",
   ].map((id) => [id, element(id)]));
   const csrf = document.querySelector('input[name="csrf_token"]').value;
@@ -64,6 +65,9 @@
     ui["audio-player"].removeAttribute("src");
     ui["audio-player"].load();
     ui["download-button"].removeAttribute("href");
+    ui["video-download-button"].removeAttribute("href");
+    ui["video-download-button"].hidden = true;
+    ui["video-feedback"].textContent = "";
     ui["result-content"].hidden = true;
   }
 
@@ -182,9 +186,20 @@
     return parsed.origin === window.location.origin && parsed.pathname === `/files/${currentTask.id}` ? parsed.href : null;
   }
 
+  function safeVideoUrl(url) {
+    try {
+      const safeUrl = safeFileUrl(url);
+      if (!safeUrl) return null;
+      const parsed = new URL(safeUrl);
+      return parsed.searchParams.get("kind") === "video" && parsed.searchParams.get("download") === "1"
+        ? safeUrl : null;
+    } catch { return null; }
+  }
+
   function renderTask(task) {
     const previousState = currentTask?.state;
     currentTask = task;
+    if (task.state !== "ready") clearResult();
     const terminal = terminalStates.has(task.state);
     ui["task-panel"].hidden = false;
     ui["task-heading"].textContent = stateLabels[task.state] || "正在处理";
@@ -216,6 +231,18 @@
           Number.isFinite(task.duration_seconds) ? `时长 ${Math.floor(task.duration_seconds / 60)}:${String(Math.floor(task.duration_seconds % 60)).padStart(2, "0")}` : null].filter(Boolean).join(" · ");
         ui["audio-player"].src = preview;
         ui["download-button"].href = download;
+        const videoDownload = safeVideoUrl(task.video_download_url);
+        if (videoDownload) {
+          ui["video-download-button"].href = videoDownload;
+          ui["video-download-button"].hidden = false;
+          ui["video-feedback"].textContent = "";
+        } else {
+          ui["video-download-button"].removeAttribute("href");
+          ui["video-download-button"].hidden = true;
+          ui["video-feedback"].textContent = typeof task.video_message === "string" && task.video_message.trim()
+            ? task.video_message
+            : "原视频暂无法保存为 MP4，MP3 仍可下载";
+        }
         ui["result-content"].hidden = false;
         if (supportsFileSharing()) {
           ui["prepare-share"].hidden = false;
@@ -403,6 +430,7 @@
   });
 
   ui["cancel-button"].addEventListener("click", async () => {
+    clearResult();
     if (uploadRequest) return uploadRequest.abort();
     if (!currentTask || terminalStates.has(currentTask.state)) return;
     ui["cancel-button"].disabled = true;
@@ -423,6 +451,12 @@
   });
 
   ui["download-button"].addEventListener("click", (event) => {
+    if (expired()) {
+      event.preventDefault();
+      markExpired();
+    }
+  });
+  ui["video-download-button"].addEventListener("click", (event) => {
     if (expired()) {
       event.preventDefault();
       markExpired();
