@@ -1,14 +1,15 @@
 {% extends "base.html" %}
 
 {% block title %}登录 · {{ app_name }}{% endblock %}
+{% block scripts %}<script type="module" src="/static/login.js"></script>{% endblock %}
 
 {% block body %}
 <main class="page-shell page-shell--centered" id="main-content">
   <section class="panel login-panel" aria-labelledby="page-title">
-    <a class="brand" href="/" aria-label="{{ app_name }}首页">
-      <span>{{ app_name }}</span>
-    </a>
-    <h1 id="page-title">登录</h1>
+    <div class="login-heading">
+      <a class="brand" href="/" aria-label="{{ app_name }}首页">{{ app_name }}</a>
+      <h1 id="page-title">登录</h1>
+    </div>
 
     {% if error %}
     <p class="notice notice--error" role="alert">{{ error }}</p>
@@ -17,8 +18,24 @@
     <form class="form-stack" action="/login" method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label class="field-label" for="password">访问密码</label>
-      <input class="text-control" id="password" name="password" type="password"
-             maxlength="128" autocomplete="current-password" required autofocus>
+      <div class="password-control">
+        <input class="text-control" id="password" name="password" type="password"
+               maxlength="128" autocomplete="current-password" required autofocus>
+        <button class="button button--text password-toggle" id="password-toggle" type="button"
+                aria-label="显示密码" aria-controls="password" aria-pressed="false" hidden>
+          <svg class="password-icon password-icon--show" width="20" height="20" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+               aria-hidden="true" focusable="false">
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          <svg class="password-icon password-icon--hide" width="20" height="20" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+               aria-hidden="true" focusable="false">
+            <path d="m3 3 18 18M10.6 5.1A12 12 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-3.3 4.2M6.2 6.2A21 21 0 0 0 2 12s3.5 7 10 7a11 11 0 0 0 5.8-1.8M9.9 9.9a3 3 0 0 0 4.2 4.2"/>
+          </svg>
+        </button>
+      </div>
       <button class="button button--primary button--full" type="submit">登录</button>
     </form>
   </section>

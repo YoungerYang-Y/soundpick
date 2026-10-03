@@ -23,6 +23,7 @@ lint:
 	.venv/bin/python -m ruff format --check app scripts tests
 
 ui-check:
+	mise exec -- node --input-type=module --check < app/static/login.js
 	mise exec -- node --input-type=module --check < app/static/app.js
 	mise exec -- node --input-type=module --check < app/static/task-view.js
 	mise exec -- node --input-type=module --check < app/static/file-share.js
