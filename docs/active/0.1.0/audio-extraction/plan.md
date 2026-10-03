@@ -1,6 +1,6 @@
 # MVP Implementation Plan
 
-逻辑版本：0.1.0。以 [spec.md](./spec.md) 为行为事实源，[design.md](./design.md) 为接口和边界。现状：只有登录和页面骨架，全部媒体行为新增。
+逻辑版本：0.1.0。以 [spec.md](./spec.md) 为行为事实源，[design.md](./design.md) 为接口和边界。制定计划时的基线：只有登录和页面骨架，全部媒体行为新增。当前验证进展见 [验收记录](./acceptance.md)。
 
 ## Goal / Key Decisions
 
@@ -47,4 +47,4 @@ Modify `app/templates/index.html`、`app/static/{app.js,style.css}`。沿用现�
 
 ## Decision Boundary
 
-在既定接口与行为内自行决定内部结构、测试夹具和可配置默认值。新增收费provider、持久存储、用户系统、批任务或发布需另行对齐。不自动commit/push/deploy；本轮授权是实现MVP。
+在既定接口与行为内自行决定内部结构、测试夹具和可配置默认值。新增收费provider、持久存储、用户系统、批任务或发布需另行对齐。本计划不自行授权 commit/push/deploy；Git 操作与部署依据用户后续明确指令。
