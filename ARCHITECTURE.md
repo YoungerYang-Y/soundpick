@@ -82,6 +82,8 @@ flowchart TD
 
 当前 MVP 的精确接口、容量默认、错误和验收见 [`MVP 技术设计`](./docs/active/0.1.0/audio-extraction/design.md)。初始化文档保留最初提交快照，不代表当前功能范围。
 
+运行能力检查、网络地址回退与当前标签页任务恢复见[运行与恢复决策](docs/design-docs/arch-runtime-recovery.md)。Web 启动时异步验证真实媒体工具和 MP3 编码器，能力接口读取缓存；平台请求仅在连接失败时回退到其他经校验的公网地址，逐跳隔离上游 Cookie 与连接池。浏览器只用 `sessionStorage` 保存当前任务 ID 和确认/取消标记，刷新后查询服务器，不保存媒体、分享内容或历史，不重传上传；服务器重启仍不恢复任务。
+
 原视频结果的临时交付策略见 [架构决策](./docs/design-docs/arch-video-delivery.md)，新增契约见 [MP4 技术设计](./docs/active/0.1.0/video-download/design.md)。两种媒体仍由同一任务管理，不增加网络抓取次数或持久存储。
 
 ## 审查修复后的约束
