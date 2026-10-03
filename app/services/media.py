@@ -35,11 +35,8 @@ class MediaProcessor:
             async with asyncio.timeout(self.settings.task_timeout_seconds):
                 self._validate_source(source)
                 streams, container_duration = await self._probe(source)
-                if not any(stream.get("codec_type") == "video" for stream in streams):
-                    raise MediaError("文件中没有视频画面", "missing_video")
-                audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
-                if audio is None:
-                    raise MediaError("视频中没有声音轨道", "missing_audio")
+                self._validate_stream_presence(streams)
+                audio = next(s for s in streams if s.get("codec_type") == "audio")
                 original_duration = self._duration(audio.get("duration")) or container_duration
                 if original_duration is None:
                     raise MediaError("无法确认视频声音时长", "invalid_media")
@@ -112,6 +109,7 @@ class MediaProcessor:
                 if self._is_mp4(source, info):
                     if source.resolve().parent != target.resolve().parent:
                         raise MediaError("视频保存位置无效", "invalid_media")
+                    await self._decode_video(source, streams)
                     source.chmod(0o600)
                     source.replace(target)
                 else:
@@ -162,6 +160,7 @@ class MediaProcessor:
                         raise MediaError("无法确认输出为 MP4", "video_unavailable")
                     output_duration = self._validate_video(output_streams, output_info)
                     self._validate_video_copy(selected, output_streams, duration, output_duration)
+                    await self._decode_video(target, output_streams)
                     duration = output_duration
                 succeeded = True
                 return duration
@@ -173,6 +172,37 @@ class MediaProcessor:
             if not succeeded:
                 with suppress(OSError):
                     target.unlink(missing_ok=True)
+
+    async def _decode_video(self, source: Path, streams: list[dict]) -> None:
+        # Container metadata alone cannot prove that the video packets decode.
+        # Decode every video stream to the null muxer without changing deliverable bytes.
+        mapping = []
+        for stream in streams:
+            if self._is_motion_video(stream):
+                mapping += ["-map", f"0:{stream['index']}"]
+        await self._run(
+            self.ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-xerror",
+            "-abort_on",
+            "empty_output",
+            "-err_detect",
+            "explode",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-i",
+            str(source.resolve()),
+            *mapping,
+            "-an",
+            "-sn",
+            "-dn",
+            "-f",
+            "null",
+            "-",
+        )
 
     async def _probe_video(self, path: Path) -> tuple[list[dict], dict]:
         raw = await self._run(
@@ -204,10 +234,23 @@ class MediaProcessor:
             raise MediaError("视频损坏或无法识别", "invalid_media") from None
         return streams, info
 
+    @staticmethod
+    def _is_motion_video(stream: dict) -> bool:
+        if stream.get("codec_type") != "video":
+            return False
+        disposition = stream.get("disposition", {})
+        if not isinstance(disposition, dict):
+            raise MediaError("无法确认视频流属性", "invalid_media")
+        return disposition.get("attached_pic", 0) != 1
+
+    def _validate_stream_presence(self, streams: list[dict]) -> None:
+        if not any(self._is_motion_video(stream) for stream in streams):
+            raise MediaError("文件中没有视频画面", "missing_video")
+        if not any(stream.get("codec_type") == "audio" for stream in streams):
+            raise MediaError("视频中没有声音轨道", "missing_audio")
+
     def _validate_video(self, streams: list[dict], info: dict) -> float:
-        for kind, message in (("video", "文件中没有视频画面"), ("audio", "视频中没有声音轨道")):
-            if not any(stream.get("codec_type") == kind for stream in streams):
-                raise MediaError(message, f"missing_{kind}")
+        self._validate_stream_presence(streams)
         duration = self._duration(info.get("duration"))
         if duration is None:
             raise MediaError("无法确认视频完整时长", "invalid_media")
@@ -324,7 +367,7 @@ class MediaProcessor:
             "-protocol_whitelist",
             "file,pipe",
             "-show_entries",
-            "stream=codec_type,duration:format=duration",
+            "stream=codec_type,duration:stream_disposition:format=duration",
             "-of",
             "json",
             str(path.resolve()),
