@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import fcntl
+import logging
 import re
 import secrets
 import shutil
@@ -24,6 +25,7 @@ TaskState = Literal[
     "receiving", "resolving", "downloading", "converting", "ready", "failed", "cancelled"
 ]
 TERMINAL = {"ready", "failed", "cancelled"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -187,8 +189,21 @@ class TaskManager:
             "video_message": task.video_message if ready else "",
         }
 
-    def _finish(self, task: Task, state: str, message: str) -> None:
+    def _stage(self, task: Task, state: TaskState, message: str) -> None:
         task.state, task.message = state, message
+        logger.info("task stage", extra={"task_id": task.id, "stage": state})
+
+    def _failure(self, task: Task, category: str) -> None:
+        # Never log exception messages, URLs, titles or traceback locals.
+        logger.warning(
+            "task failure stage=%s category=%s",
+            task.state,
+            category,
+            extra={"task_id": task.id, "stage": task.state, "error_category": category},
+        )
+
+    def _finish(self, task: Task, state: TaskState, message: str) -> None:
+        self._stage(task, state, message)
         task.expires_at = time.time() + self.settings.result_ttl_seconds
         if state != "ready":
             self._remove(task)
@@ -222,8 +237,11 @@ class TaskManager:
     def start(self, task: Task, share_url: str | None = None) -> None:
         if task.state != "receiving" or task.runner is not None:
             raise MediaError("任务已启动或停止，请查看原任务状态", "already_started", 409)
-        task.state = "resolving" if share_url else "converting"
-        task.message = "正在解析分享链接" if share_url else "正在提取完整音轨"
+        self._stage(
+            task,
+            "resolving" if share_url else "converting",
+            "正在解析分享链接" if share_url else "正在提取完整音轨",
+        )
         task.runner = asyncio.create_task(self._run(task, share_url))
 
     async def _run(self, task: Task, share_url: str | None) -> None:
@@ -233,11 +251,11 @@ class TaskManager:
                     video = await self.resolvers[self.select_platform(share_url)].resolve(share_url)
                     task.title = video.title or "音拾音频"
                     task.author = video.author
-                    task.state, task.message = "downloading", "正在下载原视频"
+                    self._stage(task, "downloading", "正在下载原视频")
                     await self.network.download(
                         video.video_url, task.directory / "input", self.settings.max_media_bytes
                     )
-                task.state, task.message = "converting", "正在提取完整音轨"
+                self._stage(task, "converting", "正在提取完整音轨")
                 task.duration = await self.media.extract_audio(
                     task.directory / "input", task.directory / "audio.mp3"
                 )
@@ -250,6 +268,7 @@ class TaskManager:
                 except MediaError as exc:
                     if exc.code == "media_timeout":
                         raise
+                    self._failure(task, exc.code)
                     task.video_message = "原视频暂无法保存为 MP4，MP3 仍可下载"
                 (task.directory / "input").unlink(missing_ok=True)
                 self._finish(task, "ready", "提取完成，可以试听或保存")
@@ -257,10 +276,13 @@ class TaskManager:
             self._finish(task, "cancelled", "处理已取消")
             raise
         except TimeoutError:
+            self._failure(task, "task_timeout")
             self._finish(task, "failed", "处理超时，请重试或选择较短的视频")
         except MediaError as exc:
+            self._failure(task, exc.code)
             self._finish(task, "failed", exc.message)
-        except Exception:
+        except Exception as exc:
+            self._failure(task, type(exc).__name__)
             self._finish(task, "failed", "处理失败，请稍后重试或上传本地视频")
         finally:
             task.runner = None

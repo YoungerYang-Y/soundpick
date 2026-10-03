@@ -1,6 +1,7 @@
 """Regressions for cancellation, reservations, and safe diagnostics."""
 
 import asyncio
+import logging
 import time
 
 import pytest
@@ -75,6 +76,31 @@ def test_reservation_replay_is_private_idempotent_and_expires(settings):
             await manager.close()
 
     asyncio.run(exercise())
+
+
+def test_unexpected_failure_logs_stage_and_type_without_private_values(settings, caplog):
+    async def exercise():
+        async def dns(host, port):
+            raise RuntimeError("secret-cookie-and-private-url")
+
+        manager = TaskManager(settings, MediaProcessor(settings), {}, SafeHTTP(resolve=dns))
+        await manager.open()
+        try:
+            task = manager.reserve("owner", "private-title", require_media=False)
+            manager.start(task, "https://v.douyin.com/private-share/")
+            # Missing adapter is an internal programming failure, not public platform content.
+            await task.runner
+            assert task.state == "failed"
+            assert "resolving" in caplog.text
+            assert "KeyError" in caplog.text
+            assert "private-share" not in caplog.text
+            assert "private-title" not in caplog.text
+            assert "secret-cookie" not in caplog.text
+        finally:
+            await manager.close()
+
+    with caplog.at_level(logging.WARNING, logger="app.services.tasks"):
+        asyncio.run(exercise())
 
 
 def test_expired_reservation_cannot_receive_before_periodic_cleanup(settings):
