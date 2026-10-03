@@ -6,6 +6,7 @@
 |----|------|--------|-------|----------|------|
 | initialization-boundaries | 初始化实现边界与架构候选 | stale | project | 初始化提交快照，当前 MVP 见活跃版本 | [`initialization.md`](./initialization.md) |
 | temporary-video-delivery | 双媒体临时交付 | verified | project | 0.1.0 新增 MP4 结果的保留与回收，本地实现已核对 | [`arch-video-delivery.md`](./arch-video-delivery.md) |
+| review-hardening | 任务确认、媒体有效性与可测试性 | verified | project | 0.1.0 审查修复与回归约束 | [`arch-review-hardening.md`](./arch-review-hardening.md) |
 
 ## 状态含义
 

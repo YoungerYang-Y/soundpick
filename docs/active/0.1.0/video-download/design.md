@@ -26,7 +26,7 @@ flowchart LR
   Delivery --> Cleanup[统一到期清理]
 ```
 
-`media.py` 新增 `async prepare_video(source: Path, target: Path) -> float`。先校验大小、实际容器、视频/声音流及完整时长；实际 MP4 使用同目录移动保留原字节，MOV/WebM 等尝试 FFmpeg `-c copy` 转封装。映射所有视频与音频流，复制 MP4 支持的源元数据（包括标题和视频旋转信息）；其他容器专属字段不承诺逐字保留。不截取、不重新编码，不额外下载。MP4 格式由探测信息与实际 ftyp 品牌共同确认，不能把 QuickTime MOV 直接改后缀。转换后校验视频/音频流数、编码及可确认的各流时长和容器时长；时长容差沿用 max(0.25, min(2, 原秒数×0.005)) 秒，超过容差即失败。限制输出大小为输入限额加 1 MiB 封装余量，超限或不完整删除 MP4 并返回安全错误。复用受限协议和子进程取消回收。
+`media.py` 新增 `async prepare_video(source: Path, target: Path) -> float`。先校验大小、实际容器、非attached_pic画面流/声音流及完整时长；实际 MP4 使用同目录移动保留原字节，MOV/WebM 等尝试 FFmpeg `-c copy` 转封装。映射所有视频与音频流，复制 MP4 支持的源元数据（包括标题和视频旋转信息）；其他容器专属字段不承诺逐字保留。不截取、不重新编码，不额外下载。MP4 格式由探测信息与实际 ftyp 品牌共同确认，不能把 QuickTime MOV 直接改后缀。转换后校验视频/音频流数、编码及可确认的各流时长和容器时长；时长容差沿用 max(0.25, min(2, 原秒数×0.005)) 秒，超过容差即失败。限制输出大小为输入限额加 1 MiB 封装余量，超限或不完整删除 MP4 并返回安全错误。实际MP4保留前及其他容器封装后，在处理上限内完整解码画面至null，拒绝损坏画面，检查不改变交付字节。复用受限协议和抗重复取消的子进程回收。
 
 TaskManager 先生成 MP3，再准备 MP4；后者 `MediaError` 单独降级，删除原输入与部分视频，结果 ready 并保留 MP3。整体任务超时、取消仍取消并删除全部文件。失败/取消/到期/关闭/重启的清理覆盖两种产物；任一文件发送计入同一 deliveries。
 
@@ -41,7 +41,7 @@ TaskManager 先生成 MP3，再准备 MP4；后者 `MediaError` 单独降级，�
 | GET /api/tasks/{id} / 提供两种结果 | 原 TaskView 加 video_download_url:string\|null、video_filename:string\|null、video_message:string；仅 ready 且 MP4 已就绪返回视频链接 | 原认证、owner、404 不变；只读 |
 | GET/HEAD /files/{id} / 保存原视频 | 新增 `kind: Literal['audio','video']='audio'`，保留 `download:bool=false`；audio 沿用原语义，video 返回 video/mp4 且始终 attachment、UTF-8 .mp4 文件名，支持标准 Range | 401 未认证；404 无权/到期；409 尚未完成或视频不可用（code=video_unavailable）；422 非法 kind；Range 400/416；只读可重试 |
 
-任务创建/能力/取消接口不改变。视频链接 `/files/{id}?kind=video&download=1`，页面继续校验同源 URL。无 MP4 时显示固定可读文案；取消、新任务、到期时移除旧 MP4 链接。
+本MP4接口继续兼容；创建与取消确认已由[审查修复决策](../../../design-docs/arch-review-hardening.md)补充。视频链接 `/files/{id}?kind=video&download=1`，页面继续校验同源 URL。无 MP4 时显示固定可读文案；取消、新任务、到期时移除旧 MP4 链接。
 
 ## Data Model
 

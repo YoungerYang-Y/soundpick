@@ -50,11 +50,12 @@
 
 ```bash
 make test
+make coverage
 make lint
 make ui-check
 ```
 
-本轮检查区分三层：Python 测试验证媒体边界、任务/文件生命周期、认证及 Range 响应；`tests/ui_flow.cjs` 用模拟 DOM 验证前端异步状态、上传取消与系统分享降级；实际 Chromium 检查另行记录，不能由模拟 DOM 推断视觉或真机结果。真实 FFmpeg 测试需运行工具，在缺工具时明确跳过，跳过不代表验收通过。
+本轮检查区分三层：Python 测试验证媒体边界、任务/文件生命周期、认证及 Range 响应；`tests/ui_flow.cjs` 用模拟 DOM 验证前端异步状态、上传取消与系统分享降级；真实 Chromium 回归由 `make browser-check` 单独运行，不能由模拟 DOM 推断视觉或真机结果。标准 `make test` 与 `make coverage` 从环境或 `.env` 读取两项媒体工具配置，缺工具直接失败。直接运行pytest适用于局部测试，缺工具仍会明确跳过，跳过不代表验收通过。
 
 提供工具后运行 `FFMPEG_BIN=/absolute/ffmpeg FFPROBE_BIN=/absolute/ffprobe make test`，真实生成首尾有标识音的视频，验证第一音轨首尾均保留、MP3 时长、失败清理、取消回收，以及 HTTP 上传/Range/下载/过期链路。
 
@@ -75,3 +76,13 @@ Compose 读取 `.env`，默认绑定 `127.0.0.1:8000`，使用命名数据卷、
 ## 原视频 MP4 下载补充
 
 2026-10-03 新增功能的本地完整回归为 92 项通过、零跳过，Ruff 与前端流程检查通过；真实 MP4 字节保留、MOV 全部音视频流无损封装及标题/旋转/语言/default 属性、双文件授权和共享到期保护、视频阶段取消与超时均已验证。Chromium 实际下载中文名称的 MP3 和 MP4，后者与原文件字节一致；当前火山分享实网样本返回 2,986,909 字节 MP4，与源视频 SHA-256 一致。证据和尚未验证的手机保存/播放、新增功能容器运行见 [MP4 验收记录](docs/active/0.1.0/video-download/acceptance.md)。
+
+## 审查修复与可重复回归
+
+文件输入先预约已知任务ID再上传，响应丢失后可重新连接或取消原任务；取消必须获得服务端确认。平台由统一catalog登记，前端分为任务控制、呈现和分享三个原生模块。MP4增加完整画面解码校验，失败时保留有效MP3；详见[修复决策](docs/design-docs/arch-review-hardening.md)。
+
+`make coverage` 使用 [coverage.py](https://coverage.readthedocs.io/en/latest/) 测量Python语句和分支，综合门槛85%，结果保存在忽略目录 `work/coverage/`。它混合单测与集成测试，不包括JavaScript或媒体子进程内部。
+
+真实浏览器回归需要Node 22、可用Playwright模块及其Chromium，不参与产品构建。已安装时可直接 `mise exec -- make browser-check`；工具安装在其他位置时设置 `SOUNDPICK_PLAYWRIGHT_MODULE` 为模块路径、`SOUNDPICK_CHROMIUM_BIN` 为Chromium可执行路径，必要时通过 `SOUNDPICK_NODE_BIN` 指定Node。默认重复5轮，可用 `SOUNDPICK_BROWSER_REPEAT` 指定大于1的次数；测试自行启动独立回环服务并清理临时数据，不访问当前开发服务。
+
+当前修复的测试结果见[工程验证记录](docs/references/review-hardening-verification.md)。真实手机保存、系统分享、平台实网与新容器状态仍按各自验收记录判断。

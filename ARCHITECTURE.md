@@ -83,3 +83,7 @@ flowchart TD
 当前 MVP 的精确接口、容量默认、错误和验收见 [`MVP 技术设计`](./docs/active/0.1.0/audio-extraction/design.md)。初始化文档保留最初提交快照，不代表当前功能范围。
 
 原视频结果的临时交付策略见 [架构决策](./docs/design-docs/arch-video-delivery.md)，新增契约见 [MP4 技术设计](./docs/active/0.1.0/video-download/design.md)。两种媒体仍由同一任务管理，不增加网络抓取次数或持久存储。
+
+## 审查修复后的约束
+
+[任务确认与可测试性决策](docs/design-docs/arch-review-hardening.md)定义可恢复的预约上传、幂等取消、完整画面校验和回归入口。平台ID、域名、名称与Adapter工厂由单一 `PlatformSpec` catalog提供；Web装配与任务选择共享该catalog。交付格式元数据集中在 `app/services/artifacts.py`。浏览器采用任务控制、视图和文件分享三个原生模块，保持无前端构建步骤。

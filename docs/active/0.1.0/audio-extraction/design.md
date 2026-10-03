@@ -38,8 +38,10 @@ flowchart TD
 | 接口 / 对应 Behavior | 输入 | 成功返回 | 失败 / 幂等语义 |
 |---|---|---|---|
 | GET /api/capabilities / 创建输入任务 | 无 | extraction_available, planned_inputs, platforms, limits, media_available | 未登录 401；平台可用表示已配置路径，实网验收单独报告 |
-| POST /api/tasks/upload / 创建本地视频任务 | body=单个视频二进制；filename 查询参数≤200字符 | 202 TaskView | 401/403；空文件400、超限413、媒体工具缺失503、忙409；非幂等 |
-| POST /api/tasks/link / 创建分享内容任务 | JSON `{share_text: string}` 1–4096字符 | 202 TaskView | 401/403、无效输入400、不支持422、忙409、工具缺失503；非幂等 |
+| POST /api/tasks/reservations / 预约本地视频任务 | JSON `{task_id,filename?}`，32位小写hex ID | 202 TaskView | 同owner同ID幂等；其他owner404；401/403/400/409/503 |
+| POST /api/tasks/{id}/upload / 向预约上传 | 原始视频流 | 202 TaskView | 401/403/404；非接收状态或重复上传409；超限413、超时408 |
+| POST /api/tasks/upload / 兼容旧创建入口 | body=单个视频二进制；filename 查询参数≤200字符 | 202 TaskView | 401/403；空文件400、超限413、媒体工具缺失503、忙409；非幂等 |
+| POST /api/tasks/link / 创建分享内容任务 | JSON `{share_text: string, task_id?: string}` 1–4096字符 | 202 TaskView | 401/403、无效输入400、不支持422、忙409、工具缺失503；提供同ID时幂等 |
 | GET /api/tasks/{id} / 查看进度 | id=32位随机十六进制 | 200 TaskView | 401；其他会话/不存在/过期404；只读 |
 | POST /api/tasks/{id}/cancel / 取消处理 | 无 | 200 TaskView | 401/403/404；重复取消幂等；终态保持 |
 | GET或HEAD /files/{id} / 试听与保存 | download=0或1，Range 标准请求头 | 200/206 audio/mpeg；inline或attachment UTF-8安全文件名 | 401/404、未完成409、非法范围400/416；只读 |
@@ -48,7 +50,7 @@ flowchart TD
 
 capabilities schema：`{extraction_available: bool, media_available: bool, planned_inputs: string[], platforms: [{id: string,name: string,available: bool,configured: bool}], limits: {max_media_bytes:int,max_duration_seconds:int,result_ttl_seconds:int,upload_timeout_seconds:int}}`；available/configured 仅表示启用路径，不表示链接一定可解析，页面逐任务呈现实际结果。
 
-接收阶段还未返回 task id，取消由浏览器 abort 上传请求实现；后端 ClientDisconnect/请求取消/上传超时立即删除输入和释放繁忙槽。获得202响应后取消调用 task cancel 接口；两种路径分别测试。
+浏览器在创建前生成任务ID；文件输入先预约再向已知ID上传。接收阶段中止XHR后仍请求服务端取消，响应丢失时通过同ID查询恢复，未确认不宣称停止。预约幂等、接收期限及旧接口兼容规则见[任务确认决策](../../../design-docs/arch-review-hardening.md)。
 
 平台替换契约：`async MediaResolver.resolve(url: str) -> ResolvedVideo`；失败用可读的解析错误。可配置 provider 接口 GET `url=<share_url>`，返回 `{video_url: string, title?: string, author?: string}`，可用 Bearer token；仅固定配置端点接收密钥，不向重定向地址转发。真实 provider 需提供文档/端点和样本后核对映射。内置网页路径按公开页面证据实现，不承诺绕过验证/登录限制。
 
