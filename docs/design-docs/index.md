@@ -5,7 +5,7 @@
 | id | 主题 | status | owner | 适用范围 | 路径 |
 |----|------|--------|-------|----------|------|
 | initialization-boundaries | 初始化实现边界与架构候选 | stale | project | 初始化提交快照，当前 MVP 见活跃版本 | [`initialization.md`](./initialization.md) |
-| temporary-video-delivery | 双媒体临时交付 | draft | project | 0.1.0 新增 MP4 结果的保留与回收 | [`arch-video-delivery.md`](./arch-video-delivery.md) |
+| temporary-video-delivery | 双媒体临时交付 | verified | project | 0.1.0 新增 MP4 结果的保留与回收，本地实现已核对 | [`arch-video-delivery.md`](./arch-video-delivery.md) |
 
 ## 状态含义
 

@@ -4,7 +4,7 @@
 
 ## 系统概述
 
-音拾为本人和家人提供单视频处理网页。输入为抖音或火山的分享链接、包含分享链接的整段文字，或用户上传的本地视频；输出是原视频完整音轨的 MP3。产品不做 AI 去人声、裁剪或批量处理，也不提供个人账号和历史记录。
+音拾为本人和家人提供单视频处理网页。输入为抖音或火山的分享链接、包含分享链接的整段文字，或用户上传的本地视频；输出是原视频完整音轨的 MP3 与可用的完整原视频 MP4。产品不做 AI 去人声、裁剪或批量处理，也不提供个人账号和历史记录。
 
 应用使用 FastAPI 提供服务端渲染页面和 JSON 接口，Jinja2 渲染 HTML，原生 JavaScript 完成浏览器交互。配置由 `pydantic-settings` 从环境加载；认证由共享密码和签名 Session Cookie 提供。项目不依赖数据库、Redis 或前端构建步骤。部署目标是 Python 3.14 slim 容器，容器安装 FFmpeg/FFprobe 并以非 root 用户运行。
 
@@ -48,7 +48,7 @@ flowchart TD
 - 平台差异封装在 `app/resolver/`，不得让平台解析细节散落在路由或模板中。
 - 上传、下载、任务状态与临时目录均由服务层定义边界。路由只读取受限流，不直接转码。
 - 安全网络层将核实的公网 DNS 地址固定至连接，保持原主机的 TLS 验证；媒体子进程仅处理本地文件。
-- 文件响应保护活动发送引用；到期拒绝新请求，最后一次发送释放后清理。输入、失败产物和启动残留按生命周期回收。
+- MP3 与 MP4 共用任务 owner、截止时间和活动发送引用；到期拒绝新请求，最后一次发送释放后清理。成功仅保留交付用的两种产物，失败/取消与启动残留按生命周期回收；MP4 不可用可单独降级而保留 MP3。
 
 ## 技术栈
 
@@ -71,7 +71,7 @@ flowchart TD
 | `app/config.py` | 加载和校验运行配置 | pydantic-settings |
 | `app/resolver/` | 分享识别、平台原视频地址适配，排除错误 ID/BGM | 安全网络、resolver 基础契约 |
 | `app/services/tasks.py` | 单活动任务、会话所属结果、容量、取消与清理 | media、resolver、network、临时文件系统 |
-| `app/services/media.py` | 视频/声音流、时长与完整 MP3 校验，子进程回收 | FFmpeg/FFprobe、配置 |
+| `app/services/media.py` | 视频/声音流、时长与完整 MP3 校验、原 MP4 保留或无损封装，子进程回收 | FFmpeg/FFprobe、配置 |
 | `app/services/network.py` | 公网 DNS 固定、逐跳校验、有限响应与流式下载 | httpx |
 | `app/templates/`、`app/static/` | 手机优先页面与交互 | 页面/API 契约 |
 | `scripts/` | 准备本地环境、安全初始化 `.env` | mise、Python、pip |
@@ -81,3 +81,5 @@ flowchart TD
 初始化实现边界和仍待验证的部署候选见 [`docs/design-docs/initialization.md`](./docs/design-docs/initialization.md)。
 
 当前 MVP 的精确接口、容量默认、错误和验收见 [`MVP 技术设计`](./docs/active/0.1.0/audio-extraction/design.md)。初始化文档保留最初提交快照，不代表当前功能范围。
+
+原视频结果的临时交付策略见 [架构决策](./docs/design-docs/arch-video-delivery.md)，新增契约见 [MP4 技术设计](./docs/active/0.1.0/video-download/design.md)。两种媒体仍由同一任务管理，不增加网络抓取次数或持久存储。

@@ -1,6 +1,6 @@
 # 双媒体临时交付
 
-日期：2026-10-03；状态：draft。需求授权来自本轮用户补充“原视频也可以下载 MP4 格式”。
+日期：2026-10-03；状态：verified（本地实现与工程检查）。需求授权来自本轮用户补充“原视频也可以下载 MP4 格式”。
 
 ## 决定
 
@@ -12,4 +12,4 @@ MP4 准备失败不抹去已成功的 MP3；页面明确 MP4 不可用。内存�
 
 ## 验证
 
-具体契约和回归范围见 [MP4 设计](../active/0.1.0/video-download/design.md) 与 [实施计划](../active/0.1.0/video-download/plan.md)。实现和工程验证完成后更新本决策状态；桌面或本地媒体证据不能代表真机 MP4 保存播放通过。
+具体契约和回归范围见 [MP4 设计](../active/0.1.0/video-download/design.md) 与 [实施计划](../active/0.1.0/video-download/plan.md)。92 项本地测试、实际 Chromium 双文件下载及当前火山分享实网 MP4 原字节交付已通过，详见 [新增验收](../active/0.1.0/video-download/acceptance.md)；桌面或本地媒体证据不能代表真机 MP4 保存播放通过。
