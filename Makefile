@@ -1,4 +1,4 @@
-.PHONY: setup env dev test coverage lint ui-check runtime-check
+.PHONY: setup env dev test coverage browser-check lint ui-check runtime-check
 
 setup:
 	./scripts/setup.sh
@@ -14,6 +14,9 @@ test:
 
 coverage:
 	.venv/bin/python -m scripts.run_tests --coverage
+
+browser-check:
+	.venv/bin/python -m scripts.run_tests --browser
 
 lint:
 	.venv/bin/python -m ruff check app scripts tests
