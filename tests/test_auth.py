@@ -21,7 +21,7 @@ def test_shared_password_grants_access_and_logout_revokes_browser_session(client
     assert response.status_code == 303
     page = client.get("/")
     assert page.status_code == 200
-    assert "完整原音轨" in page.text
+    assert 'id="extraction-app"' in page.text
     response = client.post("/logout", data={"csrf_token": csrf_from(page)})
     assert response.status_code == 303
     assert client.get("/api/capabilities").status_code == 401

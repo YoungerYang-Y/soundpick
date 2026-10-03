@@ -6,12 +6,9 @@
 <main class="page-shell page-shell--centered" id="main-content">
   <section class="panel login-panel" aria-labelledby="page-title">
     <a class="brand" href="/" aria-label="{{ app_name }}首页">
-      <span class="brand-mark" aria-hidden="true">音</span>
       <span>{{ app_name }}</span>
     </a>
-    <p class="eyebrow">家庭共享空间</p>
-    <h1 id="page-title">欢迎回来</h1>
-    <p class="intro">输入共享口令，继续使用音拾。</p>
+    <h1 id="page-title">登录</h1>
 
     {% if error %}
     <p class="notice notice--error" role="alert">{{ error }}</p>
@@ -19,7 +16,7 @@
 
     <form class="form-stack" action="/login" method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label class="field-label" for="password">共享口令</label>
+      <label class="field-label" for="password">访问密码</label>
       <input class="text-control" id="password" name="password" type="password"
              maxlength="128" autocomplete="current-password" required autofocus>
       <button class="button button--primary button--full" type="submit">登录</button>
