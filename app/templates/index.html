@@ -26,7 +26,7 @@
         <fieldset id="source-fields" disabled>
           <legend class="sr-only">选择来源并输入视频</legend>
           <div class="mode-switch" role="group" aria-label="输入方式">
-            <button class="mode-button is-active" type="button" data-mode="link"
+            <button class="mode-button" type="button" data-mode="link"
                     aria-pressed="true" aria-controls="link-panel">分享链接</button>
             <button class="mode-button" type="button" data-mode="file"
                     aria-pressed="false" aria-controls="file-panel">本地视频</button>
@@ -36,7 +36,7 @@
               <label class="field-label" for="share-text">视频链接</label>
               <button class="button button--text button--small" id="paste-button" type="button">粘贴</button>
             </div>
-            <textarea class="text-control text-control--area" id="share-text" name="share_text"
+            <textarea class="text-control" id="share-text" name="share_text"
                       rows="4" maxlength="4096" placeholder="粘贴链接或整段分享文字"
                       aria-describedby="link-help" spellcheck="false"></textarea>
             <p class="field-help" id="link-help">在视频页点“分享 → 复制链接”。</p>
@@ -66,7 +66,7 @@
     </section>
 
     <section class="panel task-panel" id="task-panel" aria-labelledby="task-heading" hidden>
-      <div class="task-heading-row">
+      <div>
         <p class="eyebrow" id="task-stage">正在处理</p>
       </div>
       <h2 id="task-heading" tabindex="-1">正在接收视频</h2>
@@ -83,7 +83,7 @@
         <audio id="audio-player" controls preload="none" aria-label="提取后的完整音轨"></audio>
         <a class="button button--primary button--full" id="download-button">下载 MP3</a>
         <a class="button button--quiet button--full" id="video-download-button" hidden>下载原视频 MP4</a>
-        <p class="field-help video-feedback" id="video-feedback" role="status" aria-live="polite"></p>
+        <p class="field-help" id="video-feedback" role="status" aria-live="polite"></p>
         <div class="share-actions">
           <button class="button button--text" id="prepare-share" type="button" hidden>准备分享文件</button>
           <button class="button button--text" id="share-button" type="button" hidden>打开系统分享</button>

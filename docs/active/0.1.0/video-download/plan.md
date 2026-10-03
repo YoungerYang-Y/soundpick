@@ -35,7 +35,7 @@ Modify app.js/index.html：添加原视频下载按钮和独立不可用提示�
 Modify tasks.py/main.py，Create test_video_delivery.py：聚焦回归先确认原行为缺少视频交付，再接通准备/降级/双产物字段、固定文件选择和媒体类型；两文件共用引用计数。关联 tests/test_tasks.py 与 tests/test_real_http.py 仅在行为实际改变时调整。验证本地及分享输入、认证/owner、HEAD/Range、过期/取消和降级；音频兼容。
 
 ### T4 整合与文档
-Modify README.md、ARCHITECTURE.md、docs/SECURITY.md、docs/RELIABILITY.md、docs/DOMAINS.md、docs/active/index.md、docs/active/0.1.0/audio-extraction/{spec,design,mobile-acceptance}.md 中“成功删输入”“输出仅 MP3”等约束；docs/active/0.1.0/audio-extraction/acceptance.md 仅追加新增证据并保留旧验收日期与范围，Create docs/active/0.1.0/video-download/acceptance.md。docs/design-docs/arch-video-delivery.md 和其索引同步当前决定；初始化设计是明确的历史快照，不修改为当前实现。先检查相关测试和 Ruff，再按跨媒体/文件/页面影响运行完整套件和真实浏览器流程；验收要求真实媒体测试实际执行、零跳过。临时局域网测试继续原授权，仅验证成功后重启开发服务。
+Modify README.md、ARCHITECTURE.md、docs/SECURITY.md、docs/RELIABILITY.md、docs/active/index.md、docs/active/0.1.0/audio-extraction/{spec,design,mobile-acceptance}.md 中“成功删输入”“输出仅 MP3”等约束；docs/active/0.1.0/audio-extraction/acceptance.md 仅追加新增证据并保留旧验收日期与范围，Create docs/active/0.1.0/video-download/acceptance.md。双媒体临时交付决定统一维护在 docs/design-docs/arch-review-hardening.md。先检查相关测试和 Ruff，再按跨媒体/文件/页面影响运行完整套件和真实浏览器流程；验收要求真实媒体测试实际执行、零跳过。临时局域网测试继续原授权，仅验证成功后重启开发服务。
 
 ## Integration Acceptance
 

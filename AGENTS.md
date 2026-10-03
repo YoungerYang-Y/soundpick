@@ -21,7 +21,6 @@
 
 - 系统边界与依赖方向：[`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - 工程信条：[`docs/design-docs/core-beliefs.md`](./docs/design-docs/core-beliefs.md)
-- 业务领域划分：[`docs/DOMAINS.md`](./docs/DOMAINS.md)
 - 安全策略：[`docs/SECURITY.md`](./docs/SECURITY.md)
 - 可靠性标准：[`docs/RELIABILITY.md`](./docs/RELIABILITY.md)
 
@@ -32,14 +31,9 @@
 - 技术债：[`docs/active/tech-debt-tracker.md`](./docs/active/tech-debt-tracker.md)
 - 设计决策：[`docs/design-docs/index.md`](./docs/design-docs/index.md)
 - 已确认需求：[`docs/requirements.md`](./docs/requirements.md)
-- 初始化设计与实现边界：[`docs/design-docs/initialization.md`](./docs/design-docs/initialization.md)
 - MVP 行为、设计与实施：[`docs/active/0.1.0/audio-extraction/plan.md`](./docs/active/0.1.0/audio-extraction/plan.md)
 
-### C. 参考与产物
-
-- 自动生成的文档（禁止手改）：[`docs/generated/`](./docs/generated/)
-- 产品思维：[`docs/PRODUCT_SENSE.md`](./docs/PRODUCT_SENSE.md)
-- 初始化期间不生成源码参考文档：[`docs/generated/index.md`](./docs/generated/index.md)
+产品取舍见已确认需求，模块职责见架构。按需生成源码参考文档，生成产物不得手改。
 
 ## 代码导航
 

@@ -1,6 +1,15 @@
+---
+id: audio-extraction
+status: verified
+owner: project
+created: 2026-10-03
+---
+
 # MVP 技术设计
 
 逻辑版本：0.1.0；行为契约见 [spec.md](./spec.md)。
+
+设计已与当前实现核对；`verified` 不代表真实平台、手机或容器的完整验收，待验收行为仍按规格记录。
 
 2026-10-03 原视频 MP4 下载新增接口、字段和临时文件策略见 [补充设计](../video-download/design.md)。下述音频契约保持兼容，原视频保留与双文件交付以补充设计为准。
 

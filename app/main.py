@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from fastapi import FastAPI, Query, Request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
@@ -203,7 +203,7 @@ def create_app(
     async def json_input(request: Request, model: type[InputModel]) -> InputModel:
         try:
             return model.model_validate(await request.json())
-        except (ValueError, ValidationError):
+        except ValueError:
             raise MediaError(
                 "请求格式无效，请检查分享内容或任务标识", "invalid_input", 400
             ) from None

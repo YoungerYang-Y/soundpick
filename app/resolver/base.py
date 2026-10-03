@@ -2,10 +2,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
-class ResolverNotConfigured(RuntimeError):
-    """The selected platform has no configured parsing provider."""
-
-
 @dataclass(frozen=True)
 class ResolvedVideo:
     video_url: str

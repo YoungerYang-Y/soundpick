@@ -293,7 +293,7 @@ function initialize() {
     if (state.busy) return;
     state.mode = button.dataset.mode;
     document.querySelectorAll('[data-mode]').forEach(item => {
-      item.classList.toggle('is-active', item === button); item.setAttribute('aria-pressed', String(item === button));
+      item.setAttribute('aria-pressed', String(item === button));
     });
     document.querySelectorAll('[data-panel]').forEach(panel => { panel.hidden = panel.dataset.panel !== state.mode; });
     view.feedback();

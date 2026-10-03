@@ -200,7 +200,7 @@ docs/                # 需求、设计与验收证据
 
 本地测试、真实媒体、平台实网、容器和手机验收分别记录，不能互相替代：
 
-- [本轮优化验证](docs/references/system-optimization-verification.md)：Python、覆盖率、浏览器刷新恢复与异步交互检查；[前轮工程回归](docs/references/review-hardening-verification.md)保留历史证据。
+- [工程验证](docs/references/system-optimization-verification.md)：Python、覆盖率、浏览器刷新恢复与异步交互检查，含前轮验证摘要。
 - [原音轨验收](docs/active/0.1.0/audio-extraction/acceptance.md)与 [MP4 验收](docs/active/0.1.0/video-download/acceptance.md)：媒体完整性、下载和生命周期。
 - [平台解析记录](docs/references/platform-parsing.md)：已验证样本与平台限制。
 - [手机验收](docs/active/0.1.0/audio-extraction/mobile-acceptance.md)与[容器验证](docs/references/container-verification.md)：设备和运行环境的待验收项。

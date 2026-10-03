@@ -1,6 +1,6 @@
 # 活跃版本索引
 
-整体产品范围记录在 [`../requirements.md`](../requirements.md)，项目初始化设计见 [`../design-docs/initialization.md`](../design-docs/initialization.md)。MVP 按 0.1.0 实施。
+整体产品范围记录在 [`../requirements.md`](../requirements.md)，系统边界见 [架构](../../ARCHITECTURE.md)。MVP 按 0.1.0 实施。
 
 | 版本号 | 分支 | 状态 | 开始日期 | 路径 |
 |--------|------|------|----------|------|

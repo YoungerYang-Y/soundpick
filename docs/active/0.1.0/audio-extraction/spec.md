@@ -1,3 +1,11 @@
+---
+id: audio-extraction
+status: in-progress
+owner: project
+created: 2026-10-03
+updated: 2026-10-03
+---
+
 # MVP 行为规格
 
 逻辑版本：0.1.0。范围依据：[`../../../requirements.md`](../../../requirements.md)。
