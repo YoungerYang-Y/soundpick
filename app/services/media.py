@@ -1,4 +1,4 @@
-"""Local media validation and complete first-audio-stream MP3 conversion."""
+"""Local media validation, complete MP3 conversion, and lossless MP4 preparation."""
 
 import asyncio
 import json
@@ -96,6 +96,199 @@ class MediaProcessor:
             if not succeeded:
                 with suppress(OSError):
                     target.unlink(missing_ok=True)
+
+    async def prepare_video(self, source: Path, target: Path) -> float:
+        """Preserve actual MP4 bytes; other containers require lossless remuxing."""
+        if source.resolve() == target.resolve():
+            raise MediaError("输入和输出文件必须不同", "invalid_media")
+        succeeded = False
+        try:
+            if not self.available:
+                raise MediaError("媒体工具不可用，请联系管理员", "media_unavailable", 503)
+            async with asyncio.timeout(self.settings.task_timeout_seconds):
+                self._validate_source(source)
+                streams, info = await self._probe_video(source)
+                duration = self._validate_video(streams, info)
+                if self._is_mp4(source, info):
+                    if source.resolve().parent != target.resolve().parent:
+                        raise MediaError("视频保存位置无效", "invalid_media")
+                    source.chmod(0o600)
+                    source.replace(target)
+                else:
+                    selected = [
+                        stream
+                        for stream in streams
+                        if stream.get("codec_type") in {"video", "audio"}
+                    ]
+                    mapping = []
+                    for output_index, stream in enumerate(selected):
+                        mapping += ["-map", f"0:{stream['index']}"]
+                        disposition = stream.get("disposition", {})
+                        if not isinstance(disposition, dict):
+                            raise MediaError("无法确认视频流属性", "invalid_media")
+                        flags = "+".join(
+                            flag for flag, enabled in disposition.items() if enabled == 1
+                        )
+                        mapping += [f"-disposition:{output_index}", flags or "0"]
+                    output_limit = self.settings.max_media_bytes + 1024 * 1024
+                    await self._run(
+                        self.ffmpeg,
+                        "-nostdin",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-xerror",
+                        "-protocol_whitelist",
+                        "file,pipe",
+                        "-i",
+                        str(source.resolve()),
+                        *mapping,
+                        "-c",
+                        "copy",
+                        "-map_metadata",
+                        "0",
+                        "-fs",
+                        str(output_limit),
+                        "-f",
+                        "mp4",
+                        str(target.resolve()),
+                    )
+                    if not target.is_file() or not 0 < target.stat().st_size <= output_limit:
+                        raise MediaError("视频输出为空或超过大小限制", "video_unavailable")
+                    target.chmod(0o600)
+                    output_streams, output_info = await self._probe_video(target)
+                    if not self._is_mp4(target, output_info):
+                        raise MediaError("无法确认输出为 MP4", "video_unavailable")
+                    output_duration = self._validate_video(output_streams, output_info)
+                    self._validate_video_copy(selected, output_streams, duration, output_duration)
+                    duration = output_duration
+                succeeded = True
+                return duration
+        except TimeoutError:
+            raise MediaError("视频处理超时，请重试", "media_timeout") from None
+        except OSError:
+            raise MediaError("无法读取或处理视频文件，请重试", "media_error") from None
+        finally:
+            if not succeeded:
+                with suppress(OSError):
+                    target.unlink(missing_ok=True)
+
+    async def _probe_video(self, path: Path) -> tuple[list[dict], dict]:
+        raw = await self._run(
+            self.ffprobe,
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-show_entries",
+            "stream=index,codec_type,codec_name,duration:"
+            "stream_disposition:stream_tags:stream_side_data:"
+            "format=format_name,duration:format_tags",
+            "-of",
+            "json",
+            str(path.resolve()),
+            capture=True,
+        )
+        try:
+            result = json.loads(raw)
+            streams, info = result["streams"], result["format"]
+            if (
+                not isinstance(streams, list)
+                or len(streams) > _MAX_STREAMS
+                or not all(isinstance(stream, dict) for stream in streams)
+                or not isinstance(info, dict)
+            ):
+                raise ValueError
+        except (ValueError, TypeError, KeyError, RecursionError):
+            raise MediaError("视频损坏或无法识别", "invalid_media") from None
+        return streams, info
+
+    def _validate_video(self, streams: list[dict], info: dict) -> float:
+        for kind, message in (("video", "文件中没有视频画面"), ("audio", "视频中没有声音轨道")):
+            if not any(stream.get("codec_type") == kind for stream in streams):
+                raise MediaError(message, f"missing_{kind}")
+        duration = self._duration(info.get("duration"))
+        if duration is None:
+            raise MediaError("无法确认视频完整时长", "invalid_media")
+        durations = [duration]
+        for stream in streams:
+            if stream.get("codec_type") not in {"video", "audio"}:
+                continue
+            if (
+                not isinstance(stream.get("codec_name"), str)
+                or not stream["codec_name"]
+                or type(stream.get("index")) is not int
+                or stream["index"] < 0
+            ):
+                raise MediaError("无法确认视频编码或流标识", "invalid_media")
+            stream_duration = self._duration(stream.get("duration"))
+            if stream_duration is not None:
+                durations.append(stream_duration)
+        if max(durations) > self.settings.max_duration_seconds:
+            raise MediaError("视频超过时长限制", "duration_limit")
+        return duration
+
+    def _validate_video_copy(
+        self,
+        original: list[dict],
+        output: list[dict],
+        original_duration: float,
+        output_duration: float,
+    ) -> None:
+        actual = [stream for stream in output if stream.get("codec_type") in {"video", "audio"}]
+        if len(original) != len(actual):
+            raise MediaError("视频流不完整，请重新处理", "incomplete_video")
+        pairs = [(original_duration, output_duration)]
+        for before, after in zip(original, actual, strict=True):
+            if (before.get("codec_type"), before.get("codec_name")) != (
+                after.get("codec_type"),
+                after.get("codec_name"),
+            ):
+                raise MediaError("视频编码发生变化，请重新处理", "incomplete_video")
+            before_duration = self._duration(before.get("duration"))
+            if before_duration is not None:
+                after_duration = self._duration(after.get("duration"))
+                if after_duration is None:
+                    raise MediaError("无法确认输出视频流时长", "incomplete_video")
+                pairs.append((before_duration, after_duration))
+        for before, after in pairs:
+            if abs(before - after) > max(0.25, min(2.0, before * 0.005)):
+                raise MediaError("原视频不完整，请重新处理", "incomplete_video")
+
+    @staticmethod
+    def _is_mp4(path: Path, info: dict) -> bool:
+        # FFprobe shares one demuxer for MOV/MP4; ftyp must also identify MP4.
+        if "mp4" not in str(info.get("format_name", "")).split(","):
+            return False
+        brands = {b"isom", b"mp41", b"mp42", b"avc1", b"M4V ", b"MSNV", b"dash", b"cmfc", b"cmfs"}
+        brands.update(f"iso{version}".encode() for version in range(2, 10))
+        file_size = path.stat().st_size
+        with path.open("rb") as stream:
+            for _ in range(128):
+                start = stream.tell()
+                header = stream.read(8)
+                if len(header) != 8:
+                    return False
+                box_size = int.from_bytes(header[:4], "big")
+                header_size = 8
+                if box_size == 1:
+                    extended = stream.read(8)
+                    if len(extended) != 8:
+                        return False
+                    box_size = int.from_bytes(extended, "big")
+                    header_size = 16
+                elif box_size == 0:
+                    box_size = file_size - start
+                if box_size < header_size or start + box_size > file_size:
+                    return False
+                if header[4:] == b"ftyp":
+                    if box_size < header_size + 8:
+                        return False
+                    # QuickTime's qt brand is deliberately absent, even with MP4 suffix.
+                    return stream.read(4) in brands
+                stream.seek(start + box_size)
+        return False
 
     def _validate_source(self, source: Path) -> None:
         size = source.stat().st_size
