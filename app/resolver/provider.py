@@ -21,8 +21,14 @@ def router_data(html: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def text_field(value, limit=200) -> str:
-    return value[:limit] if isinstance(value, str) else ""
+def text_field(value: object, limit: int = 200) -> str:
+    if not isinstance(value, str):
+        return ""
+    # JSON may contain unpaired UTF-16 surrogates, which cannot be sent as UTF-8.
+    normalized = value.encode("utf-16-le", errors="surrogatepass").decode(
+        "utf-16-le", errors="replace"
+    )
+    return normalized[:limit]
 
 
 def resolved(url, title="", author="") -> ResolvedVideo:

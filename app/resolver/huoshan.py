@@ -3,14 +3,14 @@ from urllib.parse import parse_qs, urlsplit
 
 from app.resolver.base import MediaResolver, ResolvedVideo
 from app.resolver.provider import configured_provider, json_body, resolved
-from app.resolver.registry import platform_of
+from app.resolver.registry import platform_name, platform_of
 from app.services.errors import MediaError
 from app.services.network import SafeHTTP
 
 
 class HuoshanResolver(MediaResolver):
     platform = "huoshan"
-    display_name = "火山"
+    display_name = platform_name("huoshan")
     available = True
 
     def __init__(self, network: SafeHTTP | None = None, endpoint: str = "", token: str = ""):

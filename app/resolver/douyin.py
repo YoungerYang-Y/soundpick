@@ -3,14 +3,14 @@ from urllib.parse import parse_qs, urlsplit
 
 from app.resolver.base import MediaResolver, ResolvedVideo
 from app.resolver.provider import configured_provider, json_body, resolved, router_data
-from app.resolver.registry import platform_of
+from app.resolver.registry import platform_name, platform_of
 from app.services.errors import MediaError
 from app.services.network import SafeHTTP
 
 
 class DouyinResolver(MediaResolver):
     platform = "douyin"
-    display_name = "抖音"
+    display_name = platform_name("douyin")
     available = True
 
     def __init__(self, network: SafeHTTP | None = None, endpoint: str = "", token: str = ""):
@@ -35,14 +35,33 @@ class DouyinResolver(MediaResolver):
         for field in ("play_addr", "download_addr"):
             address = video.get(field) or {}
             urls = address.get("url_list", []) if isinstance(address, dict) else []
-            if urls:
-                author = item.get("author") or {}
-                return resolved(
-                    urls[0],
-                    item.get("desc", ""),
-                    author.get("nickname", "") if isinstance(author, dict) else "",
-                )
+            if not isinstance(urls, list):
+                continue
+            author = item.get("author") or {}
+            for url in urls:
+                if not isinstance(url, str) or not url:
+                    continue
+                try:
+                    return resolved(
+                        url,
+                        item.get("desc", ""),
+                        author.get("nickname", "") if isinstance(author, dict) else "",
+                    )
+                except MediaError:
+                    continue
         raise MediaError("未取得原视频地址，请改上传本地视频", "resolve_failed")
+
+    @classmethod
+    def _from_items(cls, items: object, video_id: str) -> ResolvedVideo | None:
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if isinstance(item, dict) and str(item.get("aweme_id")) == video_id:
+                try:
+                    return cls.from_item(item)
+                except MediaError:
+                    continue
+        return None
 
     async def resolve(self, url: str) -> ResolvedVideo:
         if platform_of(url) != self.platform:
@@ -64,9 +83,9 @@ class DouyinResolver(MediaResolver):
                 )
                 if page.status != 200:
                     continue
-                for item in json_body(page.body).get("aweme_list", []):
-                    if isinstance(item, dict) and str(item.get("aweme_id")) == video_id:
-                        return self.from_item(item)
+                video = self._from_items(json_body(page.body).get("aweme_list"), video_id)
+                if video is not None:
+                    return video
             except MediaError:
                 continue
         page = await self.network.fetch(f"https://www.iesdouyin.com/share/video/{video_id}/")
@@ -75,7 +94,8 @@ class DouyinResolver(MediaResolver):
         if isinstance(loader, dict):
             for content in loader.values():
                 info = content.get("videoInfoRes") if isinstance(content, dict) else None
-                for item in (info or {}).get("item_list", []) if isinstance(info, dict) else []:
-                    if isinstance(item, dict) and str(item.get("aweme_id")) == video_id:
-                        return self.from_item(item)
+                items = info.get("item_list") if isinstance(info, dict) else None
+                video = self._from_items(items, video_id)
+                if video is not None:
+                    return video
         raise MediaError("抖音链接暂时无法解析，请重新分享或上传本地视频", "resolve_failed")
