@@ -21,7 +21,7 @@ def test_shared_password_grants_access_and_logout_revokes_browser_session(client
     assert response.status_code == 303
     page = client.get("/")
     assert page.status_code == 200
-    assert "音频提取功能正在准备中，暂不可用" in page.text
+    assert "完整原音轨" in page.text
     response = client.post("/logout", data={"csrf_token": csrf_from(page)})
     assert response.status_code == 303
     assert client.get("/api/capabilities").status_code == 401
@@ -65,7 +65,7 @@ def test_tampered_session_cookie_is_rejected(client, settings):
     assert client.get("/api/capabilities").status_code == 401
 
 
-def test_capabilities_do_not_claim_unimplemented_extraction_is_available(client, settings):
+def test_capabilities_identify_supported_inputs_and_platform_adapters(client, settings):
     page = client.get("/login")
     client.post(
         "/login",
@@ -73,8 +73,8 @@ def test_capabilities_do_not_claim_unimplemented_extraction_is_available(client,
     )
     response = client.get("/api/capabilities")
     assert response.status_code == 200
-    assert response.json()["extraction_available"] is False
-    assert all(not platform["available"] for platform in response.json()["platforms"])
+    assert response.json()["planned_inputs"] == ["share_text", "video_upload"]
+    assert [platform["id"] for platform in response.json()["platforms"]] == ["douyin", "huoshan"]
 
 
 def test_repeated_login_attempts_are_limited(client):
