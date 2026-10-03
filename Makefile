@@ -1,4 +1,4 @@
-.PHONY: setup env dev test lint
+.PHONY: setup env dev test lint ui-check runtime-check
 
 setup:
 	./scripts/setup.sh
@@ -15,3 +15,10 @@ test:
 lint:
 	.venv/bin/python -m ruff check app scripts tests
 	.venv/bin/python -m ruff format --check app scripts tests
+
+ui-check:
+	mise exec -- node --check app/static/app.js
+	mise exec -- node tests/ui_flow.cjs
+
+runtime-check:
+	.venv/bin/python -m scripts.check_runtime
