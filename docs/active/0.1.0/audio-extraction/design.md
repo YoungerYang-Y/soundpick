@@ -15,7 +15,11 @@ created: 2026-10-03
 
 ## Context / Goal / Non-Goal
 
-现有共享密码、CSRF、页面骨架可用，尚无媒体链路。目标是连通两种输入到完整 MP3 并通过来源逐项验收。保持单进程家庭用途，无账户、历史查询、数据库、Redis、前端构建或持久任务队列。
+| 项目 | 说明 |
+|---|---|
+| 基线 | 共享密码、CSRF、页面骨架可用，尚无媒体链路 |
+| 目标 | 连通两种输入到完整 MP3，并通过来源逐项验收 |
+| 边界 | 单进程家庭用途；无账户、历史查询、数据库、Redis、前端构建或持久任务队列 |
 
 ## Architecture
 
@@ -34,11 +38,13 @@ flowchart TD
   Delivery --> Page
 ```
 
-- `app/services/network.py`：URL/DNS 校验、逐跳重定向、TLS/Host 保持原始主机且连接固定经核实的公网 IP；不使用环境代理。下载与页面响应逐块计数。
-- `app/resolver/`：平台域名登记、分享文本规范化、网页适配及可配置 provider；只取视频地址。拒绝 music/BGM 地址；输出不含 cookie/token。
-- `app/services/media.py`：仅本地文件探测、视频/声音流与时长校验、FFmpeg 完整转 MP3、产物时长检查。子进程无 shell，限制协议为 file/pipe；超时/取消杀死并回收子进程。
-- `app/services/tasks.py`：内存任务，接收和处理共享一个繁忙槽位，最多 32 个保留结果；输入用随机目录，文件权限私有。生命周期取消处理、周期过期回收、下次启动移除本应用专属残留目录。仅单 worker；不宣称多实例安全。
-- 原始 body 上传避免 multipart 全量缓冲，前端直接发送 File；小请求继续早期限制，上传按实际传入块计数。认证/CSRF 在读取上传前完成。
+| 模块 | 职责 | 约束 |
+|---|---|---|
+| `app/services/network.py` | URL/DNS 校验、逐跳重定向；下载与页面响应逐块计数 | TLS/Host 保持原始主机，连接固定经核实的公网 IP；不使用环境代理 |
+| `app/resolver/` | 平台域名登记、分享文本规范化、网页适配及可配置 provider | 只取视频地址，拒绝 music/BGM；输出不含 cookie/token |
+| `app/services/media.py` | 仅本地文件探测、视频/声音流与时长校验、FFmpeg 完整转 MP3、产物时长检查 | 子进程无 shell，协议仅 file/pipe；超时/取消杀死并回收子进程 |
+| `app/services/tasks.py` | 内存任务；生命周期取消处理、周期过期回收、下次启动移除本应用专属残留目录 | 接收和处理共享一个繁忙槽位，最多 32 个保留结果；随机输入目录、私有文件权限；仅单 worker，不宣称多实例安全 |
+| 上传 | 原始 body，前端直接发送 File，避免 multipart 全量缓冲 | 小请求继续早期限制；上传按实际传入块计数；读取上传前完成认证/CSRF |
 
 ## Interface Contract
 
@@ -57,28 +63,107 @@ flowchart TD
 
 任务所属会话在成功登录时生成随机 owner，签名 Cookie 保存；共享密码不意味着不同浏览器能枚举任务。密码变化后旧认证失效。
 
-capabilities schema：`{extraction_available: bool, media_available: bool, planned_inputs: string[], platforms: [{id: string,name: string,available: bool,configured: bool}], limits: {max_media_bytes:int,max_duration_seconds:int,result_ttl_seconds:int,upload_timeout_seconds:int}}`；available/configured 仅表示启用路径，不表示链接一定可解析，页面逐任务呈现实际结果。
+capabilities schema（字段类型）：
 
-浏览器在创建前生成任务ID；文件输入先预约再向已知ID上传。接收阶段中止XHR后仍请求服务端取消，响应丢失时通过同ID查询恢复，未确认不宣称停止。预约幂等、接收期限及旧接口兼容规则见[任务确认决策](../../../design-docs/arch-review-hardening.md)。
+```text
+{
+  extraction_available: bool,
+  media_available: bool,
+  planned_inputs: string[],
+  platforms: [{
+    id: string,
+    name: string,
+    available: bool,
+    configured: bool
+  }],
+  limits: {
+    max_media_bytes: int,
+    max_duration_seconds: int,
+    result_ttl_seconds: int,
+    upload_timeout_seconds: int
+  }
+}
+```
 
-平台替换契约：`async MediaResolver.resolve(url: str) -> ResolvedVideo`；失败用可读的解析错误。可配置 provider 接口 GET `url=<share_url>`，返回 `{video_url: string, title?: string, author?: string}`，可用 Bearer token；仅固定配置端点接收密钥，不向重定向地址转发。真实 provider 需提供文档/端点和样本后核对映射。内置网页路径按公开页面证据实现，不承诺绕过验证/登录限制。
+- available/configured 仅表示启用路径，不表示链接一定可解析。
+- 页面逐任务呈现实际结果。
+
+1. 浏览器在创建前生成任务ID；文件输入先预约，再向已知ID上传。
+2. 接收阶段中止XHR后仍请求服务端取消；响应丢失时通过同ID查询恢复，未确认不宣称停止。
+3. 预约幂等、接收期限及旧接口兼容规则见[任务确认决策](../../../design-docs/arch-review-hardening.md)。
+
+| 平台替换项 | 契约 / 边界 |
+|---|---|
+| Resolver | `async MediaResolver.resolve(url: str) -> ResolvedVideo`；失败用可读的解析错误 |
+| 可配置 provider | GET `url=<share_url>`，返回 `{video_url: string, title?: string, author?: string}`，可用 Bearer token |
+| 凭据 | 仅固定配置端点接收密钥，不向重定向地址转发 |
+| 真实 provider | 提供文档/端点和样本后核对映射 |
+| 内置网页路径 | 按公开页面证据实现，不承诺绕过验证/登录限制 |
 
 内部公共契约在 T1 冻结：
 
-- `ResolvedVideo(video_url: str, title: str='', author: str='', original_audio_url: str|None=None)` 沿用基线；MVP 一律下载 video_url，不使用音频候选。
-- `MediaError(message: str, code: str='media_error', status: int=422)` 用于可公开失败；解析失败 code=resolve_failed，网络失败 network_error，时长越界 duration_limit；取消使用 asyncio.CancelledError，不包装为成功。
-- `SafeHTTP.fetch(url: str, *, max_bytes: int=2097152, headers: dict|None=None, follow_redirects: bool=True) -> HTTPPage(url:str,status:int,headers:dict,body:bytes)`；失败 MediaError。
-- `SafeHTTP.download(url: str, target: Path, max_bytes: int) -> None`：有上限的流写本地；失败不留部分文件。
-- `MediaProcessor(settings: Settings).available: bool`；`async extract_audio(source: Path, target: Path) -> float`：返回产物时长秒数，失败 MediaError；对比源第一条音频流时长（缺失时用容器时长）与MP3时长，允许编码填充差 max(0.25, min(2, duration*0.005)) 秒；负责magic/视频+音频/时长/完整性检查，不负责删除source；取消必须回收子进程。配置名 `ffmpeg_bin`/`ffprobe_bin`、`max_duration_seconds`、`max_media_bytes`、`task_timeout_seconds`。
-- `TaskManager(settings, media, resolvers, network)` 暴露 reserve(owner,title)->Task、start(task,share_url=None)、get(id,owner)->Task、async cancel(task)、async receive(task,stream)、view(task)->dict、async sweep()/close()。同步reserve先占繁忙槽，防止并发接收绕过限制；start不排队。Task 状态只由manager修改。
+| 契约 | 签名 | 语义 |
+|---|---|---|
+| ResolvedVideo | `ResolvedVideo(video_url: str, title: str='', author: str='', original_audio_url: str\|None=None)` | 沿用基线；MVP 一律下载 video_url，不使用音频候选 |
+| MediaError | `MediaError(message: str, code: str='media_error', status: int=422)` | 可公开失败；解析失败 code=resolve_failed，网络失败 network_error，时长越界 duration_limit；取消使用 asyncio.CancelledError，不包装为成功 |
+| SafeHTTP.fetch | `SafeHTTP.fetch(url: str, *, max_bytes: int=2097152, headers: dict\|None=None, follow_redirects: bool=True) -> HTTPPage(url:str,status:int,headers:dict,body:bytes)` | 失败 MediaError |
+| SafeHTTP.download | `SafeHTTP.download(url: str, target: Path, max_bytes: int) -> None` | 有上限的流写本地；失败不留部分文件 |
+
+MediaProcessor：
+
+| 项目 | 契约 / 约束 |
+|---|---|
+| 能力 | `MediaProcessor(settings: Settings).available: bool` |
+| 提取 | `async extract_audio(source: Path, target: Path) -> float`；返回产物时长秒数，失败 MediaError |
+| 时长 | 对比源第一条音频流时长（缺失时用容器时长）与MP3时长；允许编码填充差 max(0.25, min(2, duration*0.005)) 秒 |
+| 职责 | magic/视频+音频/时长/完整性检查；不负责删除source；取消必须回收子进程 |
+| 配置名 | `ffmpeg_bin`/`ffprobe_bin`、`max_duration_seconds`、`max_media_bytes`、`task_timeout_seconds` |
+
+TaskManager：`TaskManager(settings, media, resolvers, network)`。
+
+| 方法 | 契约 / 约束 |
+|---|---|
+| `reserve(owner,title)->Task` | 同步先占繁忙槽，防止并发接收绕过限制 |
+| `start(task,share_url=None)` | 不排队 |
+| `get(id,owner)->Task` | 查询任务 |
+| `async cancel(task)` | 取消 |
+| `async receive(task,stream)` | 接收上传 |
+| `view(task)->dict` | 任务视图 |
+| `async sweep()/close()` | 清理 / 关闭 |
+
+Task 状态只由manager修改。
 
 ## Data Model
 
-Task 内部：id/owner:string，state=receiving/resolving/downloading/converting/ready/failed/cancelled，title/author/message:string，目录:Path，duration:float|null，expires_at:UTC timestamp，asyncio runner，delivery引用计数。无数据库/索引；字典按 id 查询，owner 匹配后才能响应。
+Task 内部：
 
-TaskView：`{id,state,message,title,author,duration_seconds,expires_at,preview_url,download_url,filename}`；字符串字段，duration_seconds 为 float|null，expires_at 为 UTC Unix 秒数 float|null，结果链接/文件名为 string|null。结果 URL/filename 仅 ready 状态返回；不返回内部路径/媒体地址。
+| 字段 | 类型 / 值 |
+|---|---|
+| id/owner | string |
+| state | receiving/resolving/downloading/converting/ready/failed/cancelled |
+| title/author/message | string |
+| 目录 | Path |
+| duration | float\|null |
+| expires_at | UTC timestamp |
+| 运行与交付 | asyncio runner；delivery引用计数 |
 
-所有终态（ready/failed/cancelled）均在终态进入时设置保留截止时间；到期删除元数据，字典总数上限32，失败/取消同样计数。不存在/过期统一404 `{code:'task_missing',detail:'任务不存在或已过期，请重新提取'}`，前端保留已知截止时间并给相同重新提取指引，不要求后台历史或tombstone存储。
+无数据库/索引；字典按 id 查询，owner 匹配后才能响应。
+
+TaskView：`{id,state,message,title,author,duration_seconds,expires_at,preview_url,download_url,filename}`。
+
+| 字段 | 类型 |
+|---|---|
+| id/state/message/title/author | string |
+| duration_seconds | float\|null |
+| expires_at | UTC Unix 秒数 float\|null |
+| preview_url/download_url/filename | string\|null |
+
+结果 URL/filename 仅 ready 状态返回；不返回内部路径/媒体地址。
+
+- ready/failed/cancelled 均在进入终态时设置保留截止时间；到期删除元数据。
+- 字典总数上限32，失败/取消同样计数。
+- 不存在/过期统一404 `{code:'task_missing',detail:'任务不存在或已过期，请重新提取'}`。
+- 前端保留已知截止时间，给相同重新提取指引；不要求后台历史或tombstone存储。
 
 ## Non-Functional Requirements
 
@@ -93,7 +178,16 @@ TaskView：`{id,state,message,title,author,duration_seconds,expires_at,preview_u
 
 ## Error Handling
 
-平台登录/验证/失效：任务 failed，可提示改上传；不猜 BGM。DNS/HTTP超时/状态异常/响应超限：failed，取消子进程并删除输入。无媒体工具：新任务503，能力报告不可用。损坏媒体/无视频/无声音/时长超限：可读失败。磁盘异常：通用失败，不露内部路径。容量不足或满32结果：409并提示等待到期。取消/超时：先停止 runner/子进程，再清理。发送中的文件引用保护，响应完成或断开后释放；到期不接受新文件响应。
+| 情况 | 处理 |
+|---|---|
+| 平台登录/验证/失效 | 任务 failed，可提示改上传；不猜 BGM |
+| DNS/HTTP超时/状态异常/响应超限 | failed，取消子进程并删除输入 |
+| 无媒体工具 | 新任务503，能力报告不可用 |
+| 损坏媒体/无视频/无声音/时长超限 | 可读失败 |
+| 磁盘异常 | 通用失败，不露内部路径 |
+| 容量不足或满32结果 | 409并提示等待到期 |
+| 取消/超时 | 先停止 runner/子进程，再清理 |
+| 文件发送/到期 | 发送中的文件引用保护，响应完成或断开后释放；到期不接受新文件响应 |
 
 ## Alternatives Considered
 
@@ -117,4 +211,9 @@ TaskView：`{id,state,message,title,author,duration_seconds,expires_at,preview_u
 
 ## Milestones
 
-1. 契约、媒体工具与任务基础；2. 分享解析及安全下载；3. Web/API手机交互；4. 实网样本、真实转码和生命周期验收。缺外部样本或平台配置时仍完成其他链路，保留整体验收未完成。
+1. 契约、媒体工具与任务基础。
+2. 分享解析及安全下载。
+3. Web/API手机交互。
+4. 实网样本、真实转码和生命周期验收。
+
+缺外部样本或平台配置时仍完成其他链路，保留整体验收未完成。

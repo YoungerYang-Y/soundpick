@@ -1,10 +1,19 @@
 # MVP Implementation Plan
 
-逻辑版本：0.1.0。以 [spec.md](./spec.md) 为行为事实源，[design.md](./design.md) 为接口和边界。制定计划时的基线：只有登录和页面骨架，全部媒体行为新增。当前验证进展见 [验收记录](./acceptance.md)。
+| 项目 | 依据 |
+|---|---|
+| 逻辑版本 | 0.1.0 |
+| 行为 / 接口与边界 | [spec.md](./spec.md) / [design.md](./design.md) |
+| 制定计划时的基线 | 只有登录和页面骨架，全部媒体行为新增 |
+| 当前验证进展 | [验收记录](./acceptance.md) |
 
 ## Goal / Key Decisions
 
-完整实现两个输入（分享文本/本地视频）到原视频完整MP3、试听、下载、支持时系统分享。单进程单活动任务；工程默认200MiB/1800秒/结果3600秒可配置，非用户硬性要求。原始流上传，不将200MiB缓冲进内存。平台视频地址必须来自真实来源，禁用BGM替代。所有任务和文件归创建浏览器会话。
+- 目标：两个输入（分享文本/本地视频）→ 原视频完整MP3、试听、下载、支持时系统分享。
+- 容量：单进程单活动任务；工程默认200MiB/1800秒/结果3600秒可配置，非用户硬性要求。
+- 上传：原始流，不将200MiB缓冲进内存。
+- 来源：平台视频地址必须来自真实来源，禁用BGM替代。
+- 所属：所有任务和文件归创建浏览器会话。
 
 ## Task Dependencies / Ownership
 
@@ -21,30 +30,53 @@
 
 ### T1 公共契约与限制
 
-Modify `app/config.py`：新增可配置媒体工具、输入大小/时长/时间/保留/解析端点；保持秘密隐藏。Create `app/services/errors.py`：安全可读错误。Modify `app/resolver/base.py`：沿用现有视频契约。明确network API后再分派，禁止共享配置并发改写。
+- Modify `app/config.py`：新增可配置媒体工具、输入大小/时长/时间/保留/解析端点；保持秘密隐藏。
+- Create `app/services/errors.py`：安全可读错误。
+- Modify `app/resolver/base.py`：沿用现有视频契约。
+- 分派：明确network API后再进行；禁止共享配置并发改写。
 
 验收：配置边界测试，非法阈值拒绝；现有登录安全不退化。
 
 ### T2 媒体转换
 
-Create `app/services/media.py` 及 `tests/test_media.py`。输入Path、Settings，输出duration与本地MP3。容器magic/媒体流/时长校验；协议file/pipe、无shell、转换整段第一条原声音流；禁止裁剪、分离或music字段。超时/取消回收进程；输出时长校验。测试先描述目标行为，真实生成视频、验证MP3；缺工具不能把skip当成功。
+- Create `app/services/media.py` 及 `tests/test_media.py`；输入Path、Settings，输出duration与本地MP3。
+- 校验：容器magic/媒体流/时长，及输出时长。
+- 转换：协议file/pipe、无shell；整段第一条原声音流；禁止裁剪、分离或music字段。
+- 生命周期：超时/取消回收进程。
+- 验证：测试先描述目标行为，真实生成视频、验证MP3；缺工具不能把skip当成功。
 
 ### T3 平台与安全下载
 
-Create `app/services/network.py`，Modify `app/resolver/{base,douyin,huoshan}.py`，Create分享识别/通用provider辅助及相关测试。平台登记支持后续扩展。逐跳DNS公网与固定IP/TLS/Host；body上限，固定provider凭据不转发。真实页面字段有证据再实现。fixture测页面结构、BGM陷阱；实际样本证明平台可用。
+- 文件：Create `app/services/network.py`；Modify `app/resolver/{base,douyin,huoshan}.py`；Create分享识别/通用provider辅助及相关测试。
+- 扩展：平台登记支持后续扩展。
+- 网络：逐跳DNS公网与固定IP/TLS/Host；body上限；固定provider凭据不转发。
+- 证据：真实页面字段有证据再实现；fixture测页面结构、BGM陷阱；实际样本证明平台可用。
 
 ### T4 任务与Web API
 
-Create `app/services/tasks.py`；Modify `app/main.py`、`app/middleware.py`、相关tests。实现design全部API；保留共享密码CSRF，登录随机owner。生命周期限制一个活动任务含上传，内存结果≤32，随机目录/私有权限。不要缓冲整个上传；小请求实际字节限制保持，上传超限断流并清理。停止/取消/超时/过期/重启路径有测试；FileResponse Range与会话隔离有真实HTTP证据。
+- 文件：Create `app/services/tasks.py`；Modify `app/main.py`、`app/middleware.py`、相关tests。
+- API：实现design全部API；保留共享密码CSRF，登录随机owner。
+- 生命周期：一个活动任务含上传，内存结果≤32；随机目录/私有权限。
+- 上传：不缓冲整个上传；保持小请求实际字节限制，上传超限断流并清理。
+- 验证：停止/取消/超时/过期/重启路径有测试；FileResponse Range与会话隔离有真实HTTP证据。
 
 ### T5 手机交互
 
-Modify `app/templates/index.html`、`app/static/{app.js,style.css}`。沿用现有token、大按钮与焦点。能力检测、链接/文件输入、粘贴、上传进度、轮询/取消/错误重试、原生音频播放与下载。下载指引始终存在；分享先准备File再由用户明确点击调用，条件不满足仍可下载。用textContent展示来源文字，避免HTML拼接。不可声称浏览器保存成功或固定微信分享目标。只修改UI独占范围，契约不自行变更。
+- 文件：Modify `app/templates/index.html`、`app/static/{app.js,style.css}`；只修改UI独占范围，契约不自行变更。
+- 交互：沿用现有token、大按钮与焦点；能力检测、链接/文件输入、粘贴、上传进度、轮询/取消/错误重试、原生音频播放与下载。
+- 保存：下载指引始终存在；分享先准备File，再由用户明确点击调用；条件不满足仍可下载。
+- 内容：用textContent展示来源文字，避免HTML拼接。
+- 结论边界：不可声称浏览器保存成功或固定微信分享目标。
 
 ### T6 整合验收与文档
 
-运行相关测试、Ruff、Node语法、真实HTTP上传/播放Range/下载/取消/过期；运行可用窄屏及桌面浏览器。逐项审计spec，记录真实本地、实网、容器与手机证据区别；更新文档当前实现及剩余限制，不能缩减需求来宣称完成。Docker无守护进程时说明未验证，不部署。上游登录/限流、样本或凭据缺失时继续其他工作并具体请求必要输入。
+- 检查：相关测试、Ruff、Node语法、真实HTTP上传/播放Range/下载/取消/过期；可用窄屏及桌面浏览器。
+- 文档：逐项审计spec，区分真实本地、实网、容器与手机证据；更新当前实现及剩余限制，不能缩减需求来宣称完成。
+- Docker无守护进程：说明未验证，不部署。
+- 上游登录/限流、样本或凭据缺失：继续其他工作，并具体请求必要输入。
 
 ## Decision Boundary
 
-在既定接口与行为内自行决定内部结构、测试夹具和可配置默认值。新增收费provider、持久存储、用户系统、批任务或发布需另行对齐。本计划不自行授权 commit/push/deploy；Git 操作与部署依据用户后续明确指令。
+- 可自行决定：既定接口与行为内的内部结构、测试夹具和可配置默认值。
+- 需另行对齐：新增收费provider、持久存储、用户系统、批任务或发布。
+- 授权：本计划不自行授权 commit/push/deploy；Git 操作与部署依据用户后续明确指令。
