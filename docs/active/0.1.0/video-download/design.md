@@ -1,3 +1,10 @@
+---
+id: video-download
+status: verified
+owner: project
+created: 2026-10-03
+---
+
 # 原视频 MP4 下载设计
 
 版本：0.1.0。与 [规格](./spec.md) 配套；本补充覆盖原音频设计中“只输出 MP3”“成功删除原视频”的约束。

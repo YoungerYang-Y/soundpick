@@ -29,7 +29,8 @@
 - 共享密码登录、退出与受保护的页面。
 - 分享链接或完整分享文本解析、本地视频流式上传，一次处理一个视频。
 - 媒体容器、视频/音频流及时长检查；从原视频第一条完整音轨生成 192 kbps MP3，不读取背景音乐字段。
-- 内存任务进度、取消、超时、会话所属结果；输入在终止路径删除，MP3 到期清理，重启清理本应用残留。
+- 同次处理提供原视频 MP4 下载；已是 MP4 保留原文件字节，其他容器尝试无损封装，保留完整画面和声音。无法封装时单独提示，已成功的 MP3 仍可下载；不保证源编码兼容所有手机播放器。
+- 内存任务进度、取消、超时、会话所属结果；成功保留 MP3 与可用 MP4，失败/取消删除全部媒体，到期清理，重启清理本应用残留。
 - 原生播放器、Range 试听、标准 UTF-8 附件下载；安全页面且浏览器支持时可准备文件，再点击系统分享。
 - 手机保存指引、上传进度、断网重连与错误重试；不提供账户、处理历史或批量任务。
 
@@ -43,7 +44,7 @@
 
 可选配置 `DOUYIN_PARSER_URL` / `HUOSHAN_PARSER_URL` 和 `PARSER_API_TOKEN`，连接固定 JSON 解析端点：GET `endpoint?url=<分享链接>`，响应 `{video_url, title?, author?}`；author 可为字符串或包含 name 的对象。令牌只发给配置的固定端点，不跟随跳转。不要把密钥写进 URL；新服务需先核对其响应与原视频来源，不能直接使用 music_url。返回视频地址仍受公网 DNS、逐跳地址与下载容量限制。
 
-处理内容仅在 `DATA_DIR/.soundpick-tasks/` 下保存。成功立即删除视频输入，失败和取消删除部分产物；清理失败会在后续周期重试。结果到期拒绝新访问，已进行的文件发送结束后删除。退出进程停止任务并清理结果；重启不恢复任务。页面刷新不恢复当前结果，请及时下载。
+处理内容仅在 `DATA_DIR/.soundpick-tasks/` 下保存。成功后保留交付用的 MP3 与可用 MP4，移除其他输入或部分产物；失败和取消删除全部媒体，清理失败会在后续周期重试。两种结果到期拒绝新访问，已进行的任一文件发送结束后删除。退出进程停止任务并清理结果；重启不恢复任务。页面刷新不恢复当前结果，请及时下载。原视频 MP4 新增需求与接口见 [原视频下载设计](docs/active/0.1.0/video-download/design.md)。
 
 ## 本地检查
 
@@ -69,4 +70,8 @@ docker compose up --build
 
 Compose 读取 `.env`，默认绑定 `127.0.0.1:8000`，使用命名数据卷、非 root 用户、单应用进程和日志轮转。镜像安装 FFmpeg/FFprobe；Compose 的 `environment` 显式指定 `ffmpeg`、`ffprobe`，覆盖 `.env` 的 WSL 专属工具路径。对外部署前需要 HTTPS 入口，并设置 `APP_ENV=production`、`COOKIE_SECURE=true`。通过手机访问非 HTTPS 的局域网地址时，文件分享和剪贴板能力可能不可用，下载入口仍存在。
 
-2026-10-03 已通过 Windows Docker CLI 连接 Docker Desktop 的 Linux 引擎，成功构建并实际运行当前镜像；非 root、只读根文件系统、本地视频及火山分享的真实转码、附件、Range 和到期清理通过。独立验收容器与测试数据卷已移除，镜像保留，详情见 [容器验收记录](docs/references/container-verification.md)。WSL 默认 Unix socket 仍拒绝连接，未修改 Desktop 集成设置；从当前 WSL 调用可用的 Windows CLI 可使用 `"/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe" compose up --build`。MVP 已按用户授权分阶段本地提交，尚未配置远端、推送或部署。
+2026-10-03 在新增 MP4 需求前，已通过 Windows Docker CLI 连接 Docker Desktop 的 Linux 引擎，成功构建并实际运行当时的镜像；非 root、只读根文件系统、本地视频及火山分享的真实转码、附件、Range 和到期清理通过。独立验收容器与测试数据卷已移除，镜像保留，详情见 [容器验收记录](docs/references/container-verification.md)。旧镜像尚不包含本轮 MP4 功能，该证据不能代替新增功能的容器验收。WSL 默认 Unix socket 仍拒绝连接，未修改 Desktop 集成设置；从当前 WSL 调用可用的 Windows CLI 可使用 `"/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe" compose up --build`。MVP 已按用户授权分阶段本地提交，尚未配置远端、推送或部署。
+
+## 原视频 MP4 下载补充
+
+2026-10-03 新增功能的本地完整回归为 92 项通过、零跳过，Ruff 与前端流程检查通过；真实 MP4 字节保留、MOV 全部音视频流无损封装及标题/旋转/语言/default 属性、双文件授权和共享到期保护、视频阶段取消与超时均已验证。Chromium 实际下载中文名称的 MP3 和 MP4，后者与原文件字节一致；当前火山分享实网样本返回 2,986,909 字节 MP4，与源视频 SHA-256 一致。证据和尚未验证的手机保存/播放、新增功能容器运行见 [MP4 验收记录](docs/active/0.1.0/video-download/acceptance.md)。

@@ -1,3 +1,11 @@
+---
+id: video-download
+status: in-progress
+owner: project
+created: 2026-10-03
+updated: 2026-10-03
+---
+
 # 原视频 MP4 下载规格
 
 版本：0.1.0；补充日期：2026-10-03。本文补充音频提取 MVP，未改动的行为沿用原规格。
