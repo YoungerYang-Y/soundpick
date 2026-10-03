@@ -15,45 +15,92 @@
     </form>
   </header>
 
-  <section class="workspace" aria-labelledby="page-title">
+  <section class="workspace" aria-labelledby="page-title" id="extraction-app">
     <div class="page-heading">
       <p class="eyebrow">简单整理，随时收听</p>
       <h1 id="page-title">把视频里的声音带走</h1>
-      <p class="intro">选择一种来源。每次处理一个视频，提取完整原音轨并保存为 MP3。</p>
+      <p class="intro">每次处理一个视频，提取完整原音轨，试听后保存为 MP3。</p>
     </div>
 
     <section class="panel source-panel" aria-labelledby="source-title">
-      <h2 id="source-title">选择视频来源</h2>
-      <div class="mode-switch" role="group" aria-label="输入方式">
-        <button class="mode-button is-active" type="button" data-mode="link"
-                aria-pressed="true" aria-controls="link-panel">分享链接</button>
-        <button class="mode-button" type="button" data-mode="file"
-                aria-pressed="false" aria-controls="file-panel">本地视频</button>
-      </div>
-
-      <div class="source-content" id="link-panel" data-panel="link">
-        <label class="field-label" for="share-text">粘贴分享链接或完整分享文本</label>
-        <textarea class="text-control text-control--area" id="share-text" name="share_text"
-                  rows="4" placeholder="在这里粘贴分享内容" spellcheck="false"></textarea>
-        <p class="field-help">支持粘贴链接，也可以粘贴平台提供的整段分享文本。</p>
-      </div>
-
-      <div class="source-content" id="file-panel" data-panel="file" hidden>
-        <label class="field-label" for="video-file">选择本地视频</label>
-        <input class="file-control" id="video-file" name="video_file" type="file" accept="video/*">
-        <p class="field-help">一次选择一个视频文件。</p>
-      </div>
-
-      <div class="availability" role="status">
+      <h2 id="source-title">从哪里提取？</h2>
+      <form id="extraction-form">
+        <fieldset id="source-fields" disabled>
+          <legend class="sr-only">选择来源并输入视频</legend>
+          <div class="mode-switch" role="group" aria-label="输入方式">
+            <button class="mode-button is-active" type="button" data-mode="link"
+                    aria-pressed="true" aria-controls="link-panel">分享链接</button>
+            <button class="mode-button" type="button" data-mode="file"
+                    aria-pressed="false" aria-controls="file-panel">本地视频</button>
+          </div>
+          <div class="source-content" id="link-panel" data-panel="link">
+            <div class="field-heading">
+              <label class="field-label" for="share-text">分享链接或完整分享文本</label>
+              <button class="button button--quiet button--small" id="paste-button" type="button">粘贴</button>
+            </div>
+            <textarea class="text-control text-control--area" id="share-text" name="share_text"
+                      rows="4" maxlength="4096" placeholder="粘贴抖音或火山的分享内容"
+                      aria-describedby="link-help" spellcheck="false"></textarea>
+            <p class="field-help" id="link-help">在视频里选择“分享 → 复制链接”，整段分享文本也可以。</p>
+          </div>
+          <div class="source-content" id="file-panel" data-panel="file" hidden>
+            <label class="field-label" for="video-file">选择本地视频</label>
+            <input class="file-control" id="video-file" name="video_file" type="file" accept="video/*"
+                   aria-describedby="file-help file-details">
+            <p class="field-help" id="file-help">一次选择一个视频，提交后会检查格式和声音轨道。</p>
+            <p class="file-details" id="file-details" hidden></p>
+          </div>
+          <button class="button button--primary button--full start-button" id="start-button" type="submit">开始提取</button>
+        </fieldset>
+      </form>
+      <p class="field-help limits-note" id="limits-note">正在读取处理限制…</p>
+      <p class="field-help" id="platforms-note"></p>
+      <div class="availability" id="availability" role="status" aria-live="polite">
         <span class="status-dot" aria-hidden="true"></span>
-        <p>音频提取功能正在准备中，暂不可用</p>
+        <p id="availability-message">正在检查服务…</p>
       </div>
-      <button class="button button--primary button--full" type="button" disabled>
-        开始提取
-      </button>
+      <button class="button button--quiet retry-capabilities" id="retry-capabilities" type="button" hidden>重新检查服务</button>
+      <p class="notice notice--error form-feedback" id="form-feedback" role="alert" hidden></p>
+      <noscript><p class="notice notice--error">提取需要 JavaScript，请在浏览器中启用后刷新页面。</p></noscript>
     </section>
 
-    <p class="privacy-note">当前页面不会保存处理历史。</p>
+    <section class="panel task-panel" id="task-panel" aria-labelledby="task-heading" hidden>
+      <div class="task-heading-row">
+        <p class="eyebrow" id="task-stage">正在处理</p>
+        <span class="format-label">MP3 · 原音轨</span>
+      </div>
+      <h2 id="task-heading" tabindex="-1">正在接收视频</h2>
+      <p class="task-message" id="task-message" role="status" aria-live="polite" aria-atomic="true"></p>
+      <div class="upload-progress" id="upload-progress" hidden>
+        <progress id="upload-bar" max="100" value="0" aria-label="上传进度"></progress>
+        <p class="field-help" id="upload-label">上传 0%</p>
+      </div>
+      <ol class="process-steps" id="process-steps" aria-label="提取步骤">
+        <li data-step="source">取得视频</li><li data-step="converting">提取声音</li><li data-step="ready">试听保存</li>
+      </ol>
+      <div class="result-content" id="result-content" hidden>
+        <p class="result-meta" id="result-meta"></p>
+        <audio id="audio-player" controls preload="none" aria-label="提取后的完整音轨"></audio>
+        <a class="button button--primary button--full" id="download-button">下载 MP3</a>
+        <div class="share-actions">
+          <button class="button button--quiet button--full" id="prepare-share" type="button" hidden>准备分享文件</button>
+          <button class="button button--quiet button--full" id="share-button" type="button" hidden>打开系统分享</button>
+          <p class="field-help" id="share-feedback" role="status" aria-live="polite"></p>
+        </div>
+        <p class="expiry-note" id="expiry-note"></p>
+        <div class="save-guide">
+          <h3>保存到手机</h3>
+          <p><strong>iPhone：</strong>下载后在 Safari 的下载列表中打开，可在分享菜单中选择“存储到文件”，到“文件”App 中查找。</p>
+          <p><strong>Android：</strong>在浏览器下载列表或文件管理器的“下载”目录中查找。系统分享的可用目标由手机决定。</p>
+        </div>
+      </div>
+      <div class="task-actions">
+        <button class="button button--quiet" id="cancel-button" type="button" hidden>取消处理</button>
+        <button class="button button--quiet" id="reconnect-button" type="button" hidden>重新连接，查看进度</button>
+        <button class="button button--quiet" id="new-task-button" type="button" hidden>提取另一个视频</button>
+      </div>
+    </section>
+    <p class="privacy-note">不保存处理历史。请在结果到期前下载；刷新页面后无法找回当前任务。</p>
   </section>
 </main>
 {% endblock %}
