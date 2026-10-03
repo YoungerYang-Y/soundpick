@@ -256,7 +256,7 @@ time.sleep(30)
 
 
 def real_video(tmp_path, configured, *, audio=True):
-    """Four-second movie: first audio contains 440 Hz then 880 Hz end markers."""
+    """Four-second movie: first audio has 440/220/880 Hz start/middle/end markers."""
     import math
     import shutil
     import struct
@@ -360,6 +360,7 @@ def test_real_ffmpeg_preserves_first_audio_start_and_end(real_tools, tmp_path):
         return real * real + imaginary * imaginary
 
     assert energy(0.1, 0.5, 440) > 10 * energy(0.1, 0.5, 1200)
+    assert energy(1.8, 2.2, 220) > 10 * energy(1.8, 2.2, 1200)
     assert energy(3.5, 3.9, 880) > 10 * energy(3.5, 3.9, 1200)
     assert source.exists()
 
