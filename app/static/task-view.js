@@ -45,7 +45,7 @@ export function createTaskView(ui, state, sharing) {
     const terminal = terminalStates.has(task.state);
     ui['task-panel'].hidden = false;
     ui['task-heading'].textContent = labels[task.state] || '正在处理';
-    ui['task-stage'].textContent = terminal ? (task.state === 'ready' ? '可以试听和保存' : '处理已结束') : '正在处理';
+    ui['task-stage'].textContent = terminal ? (task.state === 'ready' ? '提取完成' : '处理已结束') : '正在处理';
     ui['task-message'].textContent = task.message || labels[task.state] || '请稍候';
     ui['upload-progress'].hidden = true;
     ui['cancel-button'].hidden = terminal;
@@ -54,7 +54,7 @@ export function createTaskView(ui, state, sharing) {
     ui['new-task-button'].hidden = !terminal;
     ui['new-task-button'].textContent = task.state === 'ready' ? '提取另一个视频' : '重新提取';
     syncBusy();
-    ui['process-steps'].hidden = task.state === 'failed' || task.state === 'cancelled';
+    ui['process-steps'].hidden = terminal;
     const step = task.state === 'ready' ? 2 : task.state === 'converting' ? 1 : 0;
     document.querySelectorAll('[data-step]').forEach((item, index) => {
       item.classList.toggle('is-current', index === step);
@@ -88,7 +88,7 @@ export function createTaskView(ui, state, sharing) {
     render();
     ui['task-stage'].textContent = file ? '正在上传' : '正在提交';
     ui['task-heading'].textContent = file ? '正在接收视频' : '正在提交分享内容';
-    ui['task-message'].textContent = file ? '保持页面打开。上传完成后会继续提取声音。' : '正在创建任务，请稍候。';
+    ui['task-message'].textContent = file ? '保持页面打开，上传后会自动提取。' : '正在创建任务，请稍候。';
     ui['upload-progress'].hidden = !file;
     ui['upload-bar'].value = 0;
     ui['upload-label'].textContent = '上传 0%';

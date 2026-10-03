@@ -88,8 +88,9 @@ function initialize() {
       const limits = state.capabilities.limits;
       ui['limits-note'].textContent = `视频上限 ${sizeLabel(limits.max_media_bytes)} · 最长 ${Math.floor(limits.max_duration_seconds / 60)} 分钟 · 结果保留 ${Math.round(limits.result_ttl_seconds / 60)} 分钟`;
       const platforms = state.capabilities.platforms.filter(item => item.available).map(item => item.name);
-      ui['platforms-note'].textContent = platforms.length ? `已启用 ${platforms.join('、')} 链接解析；具体视频以提取结果为准。` : '链接解析暂不可用，可选择本地视频。';
-      ui['availability-message'].textContent = state.capabilities.media_available ? '服务可用，一次处理一个视频' : '媒体工具尚未就绪，请联系服务维护者后重新检查。';
+      ui['platforms-note'].textContent = platforms.length ? `支持 ${platforms.join('、')} 分享链接，能否提取以实际结果为准。` : '分享链接暂不可用，请选择本地视频。';
+      ui['availability-message'].textContent = state.capabilities.media_available
+        ? (platforms.length ? '可以开始提取' : '仅本地视频可用') : '提取服务暂不可用，请联系维护者。';
       ui['availability'].classList.toggle('availability--ready', state.capabilities.media_available);
       ui['retry-capabilities'].hidden = state.capabilities.media_available;
     } catch (error) {
