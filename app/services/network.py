@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -150,6 +150,7 @@ class SafeHTTP:
             return HTTPPage(final_url, response.status_code, dict(response.headers), bytes(body))
 
     async def download(self, url: str, target: Path, max_bytes: int) -> None:
+        created = False
         try:
             async with self._response(url) as (_, response):
                 if response.status_code != 200:
@@ -157,6 +158,7 @@ class SafeHTTP:
                 self._check_length(response, max_bytes)
                 count = 0
                 with target.open("xb") as output:
+                    created = True
                     target.chmod(0o600)
                     async for chunk in response.aiter_bytes(65536):
                         count += len(chunk)
@@ -166,5 +168,8 @@ class SafeHTTP:
                 if not count:
                     raise MediaError("来源返回空视频", "download_failed")
         except BaseException:
-            target.unlink(missing_ok=True)
+            # Never remove a pre-existing file or replace the original error with cleanup failure.
+            if created:
+                with suppress(OSError):
+                    target.unlink(missing_ok=True)
             raise
