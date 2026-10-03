@@ -8,7 +8,7 @@
 
 应用使用 FastAPI 提供服务端渲染页面和 JSON 接口，Jinja2 渲染 HTML，原生 JavaScript 完成浏览器交互。配置由 `pydantic-settings` 从环境加载；认证由共享密码和签名 Session Cookie 提供。项目不依赖数据库、Redis 或前端构建步骤。部署目标是 Python 3.14 slim 容器，容器安装 FFmpeg/FFprobe 并以非 root 用户运行。
 
-MVP 使用单实例、单进程的家庭服务：内存任务状态，进程重启后不恢复任务；同一数据目录有进程锁，同一时刻只有一个接收或处理任务。媒体链路已实现，本地真实 FFmpeg 测试和一个抖音原音轨样本已通过；火山实网与手机真机验收仍待完成。当前证据见 [README.md](./README.md) 和 [平台解析记录](./docs/references/platform-parsing.md)。
+MVP 使用单实例、单进程的家庭服务：内存任务状态，进程重启后不恢复任务；同一数据目录有进程锁，同一时刻只有一个接收或处理任务。媒体链路已实现，本地真实 FFmpeg 测试、一个抖音原音轨样本和一个当前火山版共用域分享样本已通过；手机真机验收仍待完成，旧火山域样本未恢复。当前证据见 [README.md](./README.md) 和 [平台解析记录](./docs/references/platform-parsing.md)。
 
 ## 项目结构
 
