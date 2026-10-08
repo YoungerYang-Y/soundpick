@@ -15,7 +15,6 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from app.auth import (
-    LoginLimiter,
     csrf_token,
     is_authenticated,
     password_matches,
@@ -23,12 +22,13 @@ from app.auth import (
     valid_csrf,
 )
 from app.config import Settings
-from app.middleware import BodyLimitMiddleware
+from app.middleware import BodyLimitMiddleware, RateLimitMiddleware
 from app.resolver.registry import PlatformSpec, build_resolvers, extract_share_url, platform_of
 from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
 from app.services.errors import MediaError
 from app.services.media import MediaProcessor
 from app.services.network import SafeHTTP
+from app.services.protection import DAILY_SUCCESS_LIMIT
 from app.services.tasks import Task, TaskManager
 
 APP_DIR = Path(__file__).resolve().parent
@@ -74,6 +74,7 @@ def create_app(
         BodyLimitMiddleware,
         max_bytes=settings.max_body_bytes,
         upload_max_bytes=settings.max_media_bytes,
+        body_timeout_seconds=settings.request_body_timeout_seconds,
     )
     app.add_middleware(
         SessionMiddleware,
@@ -83,9 +84,13 @@ def create_app(
         same_site="lax",
         https_only=settings.cookie_secure,
     )
+    app.add_middleware(
+        RateLimitMiddleware,
+        protection=tasks.protection,
+        identity_secret=settings.session_secret.get_secret_value(),
+    )
     app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=APP_DIR / "templates")
-    limiter = LoginLimiter()
 
     def authorized(request: Request, *, write: bool = False) -> str:
         if not is_authenticated(request, settings) or not request.session.get("owner"):
@@ -96,7 +101,12 @@ def create_app(
 
     @app.exception_handler(MediaError)
     async def media_error(request: Request, exc: MediaError) -> Response:
-        return JSONResponse({"detail": exc.message, "code": exc.code}, status_code=exc.status)
+        content = {"detail": exc.message, "code": exc.code}
+        headers = {}
+        if exc.retry_after is not None:
+            content["retry_after"] = exc.retry_after
+            headers["Retry-After"] = str(exc.retry_after)
+        return JSONResponse(content, status_code=exc.status, headers=headers)
 
     def render_login(request: Request, error: str | None = None, status: int = 200) -> Response:
         return templates.TemplateResponse(
@@ -140,11 +150,6 @@ def create_app(
         form = await request.form()
         if not valid_csrf(request, form.get("csrf_token")):
             return render_login(request, "页面已过期，请重新输入口令。", 403)
-        client = request.client.host if request.client else "unknown"
-        if not limiter.allow(client):
-            response = render_login(request, "尝试次数过多，请一分钟后重试。", 429)
-            response.headers["Retry-After"] = "60"
-            return response
         password = form.get("password")
         if not isinstance(password, str) or not 1 <= len(password) <= 128:
             return render_login(request, "口令格式不正确。", 400)
@@ -192,6 +197,7 @@ def create_app(
                     for r in resolvers.values()
                 ],
                 "limits": {
+                    "daily_success_limit": DAILY_SUCCESS_LIMIT,
                     "max_media_bytes": settings.max_media_bytes,
                     "max_duration_seconds": settings.max_duration_seconds,
                     "result_ttl_seconds": settings.result_ttl_seconds,

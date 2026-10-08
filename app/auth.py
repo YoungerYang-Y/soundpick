@@ -3,8 +3,6 @@
 import hashlib
 import hmac
 import secrets
-import time
-from collections import OrderedDict
 
 from starlette.requests import Request
 
@@ -46,23 +44,3 @@ def password_matches(candidate: str, settings: Settings) -> bool:
     return secrets.compare_digest(
         hashlib.sha256(candidate.encode()).digest(), hashlib.sha256(expected.encode()).digest()
     )
-
-
-class LoginLimiter:
-    """Bounded, process-local guard; deployment must keep a single app process."""
-
-    def __init__(self, limit: int = 10, window_seconds: int = 60) -> None:
-        self.limit = limit
-        self.window_seconds = window_seconds
-        self.attempts: OrderedDict[str, list[float]] = OrderedDict()
-
-    def allow(self, client: str) -> bool:
-        now = time.monotonic()
-        recent = [t for t in self.attempts.pop(client, []) if now - t < self.window_seconds]
-        allowed = len(recent) < self.limit
-        if allowed:
-            recent.append(now)
-        self.attempts[client] = recent
-        while len(self.attempts) > 256:
-            self.attempts.popitem(last=False)
-        return allowed

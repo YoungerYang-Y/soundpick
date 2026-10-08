@@ -1,5 +1,5 @@
 ---
-updated: 2026-10-03
+updated: 2026-10-08
 ---
 
 # 安全策略
@@ -64,8 +64,14 @@ updated: 2026-10-03
 - 本地回环 HTTP 可配置 `APP_ENV=local`、`COOKIE_SECURE=false`。
 - 对外部署应使用 HTTPS，配置 `APP_ENV=production`、`COOKIE_SECURE=true`。
 - Docker 最终进程以非 root 用户运行。
+- 可选 Redis 保护账本仅保存每日成功额度和限频状态，不保存媒体历史。`REDIS_URL` 留空时或 Redis 故障时使用限频最多 4096 个桶，额度记录另设 4096 条上限 的进程内保护；不淘汰 key，容量耗尽时拒绝无法跟踪的新 key。故障期间限频窗口继续在内存中生效，但不会回灌 Redis。
+- Redis 故障后服务自动降级，不因保护存储暂时不可用停止服务。进程重启会丢失故障期间的内存额度，可能暂时超过每日额度；Redis 恢复时原子合并已知成功 ID 与 pending，若已超额则阻止新任务。旧 SQLite 文件不迁移或自动删除。
+- Redis 的 AOF/RDB 持久化由部署者配置；共享 Redis 的不同部署必须配置独立 `REDIS_KEY_PREFIX`，同一 prefix 不支持多应用实例。
+- 每日额度、接口限额与代理信任边界见[生产额度与请求防护](./design-docs/arch-production-protection.md)。默认容器关闭代理头解析；仅按实际可信拓扑显式配置精确代理 peer IP/CIDR、限制源站直连，并要求代理覆盖客户端的 `X-Forwarded-For`。
 - 基础请求体上限 16 KiB；仅原始视频上传端点采用独立 200 MiB 默认上限。
 - 上传按流式实际字节计数，并受上传超时控制。
+- 普通请求体接收总超时默认 15 秒，可配置为 1–60 秒。
+- 登录、提取、上传、轮询和下载请求在读体前计频；失败请求仍计频，IP 身份仅持久化为 HMAC 值。
 - 客户端 Content-Length/MIME/扩展名均不作为真实大小和媒体格式证明。
 
 ## 检查清单

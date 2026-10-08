@@ -18,7 +18,8 @@ def wait_terminal(client, task_id, timeout=10):
         assert response.status_code == 200
         if response.json()["state"] in {"ready", "failed", "cancelled"}:
             return response.json()
-        time.sleep(0.01)
+        # Stay within the production polling budget while waiting for real media.
+        time.sleep(0.2)
     pytest.fail("task never reached terminal state")
 
 

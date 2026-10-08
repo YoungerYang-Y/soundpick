@@ -1,18 +1,89 @@
 """Early request boundaries; only the raw upload route has a streaming budget."""
 
+import asyncio
+import hashlib
+import hmac
 import re
 
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.services.errors import MediaError
+from app.services.protection import ProtectionStore
+
+
+class RateLimitMiddleware:
+    """Admit requests before receiving bodies; never interpret client-supplied proxy headers."""
+
+    def __init__(self, app: ASGIApp, protection: ProtectionStore, identity_secret: str) -> None:
+        self.app = app
+        self.protection = protection
+        self.identity_secret = identity_secret.encode()
+
+    @staticmethod
+    def groups(method: str, path: str) -> tuple[str, ...]:
+        if method == "POST" and path == "/login":
+            return ("login",)
+        if method == "POST" and path in {"/api/tasks/link", "/api/tasks/reservations"}:
+            return ("extract",)
+        if method == "POST" and path == "/api/tasks/upload":
+            return ("extract", "upload")
+        if method == "POST" and re.fullmatch(r"/api/tasks/[^/]+/upload", path):
+            return ("upload",)
+        poll_path = path == "/api/capabilities" or path.startswith("/api/tasks/")
+        if (method == "GET" and poll_path) or (
+            method == "POST" and re.fullmatch(r"/api/tasks/[^/]+/cancel", path)
+        ):
+            return ("poll",)
+        if method in {"GET", "HEAD"} and path.startswith("/files/"):
+            return ("download",)
+        return ()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            groups = self.groups(scope["method"], scope["path"])
+            if groups:
+                address = scope.get("client")
+                identity = hmac.new(
+                    self.identity_secret,
+                    (address[0] if address else "unknown").encode(),
+                    hashlib.sha256,
+                ).hexdigest()
+                try:
+                    self.protection.check_rate(groups, identity)
+                except MediaError as exc:
+                    content = {"detail": exc.message, "code": exc.code}
+                    headers = {}
+                    if exc.retry_after is not None:
+                        content["retry_after"] = exc.retry_after
+                        headers["Retry-After"] = str(exc.retry_after)
+                    if scope["path"] == "/login":
+                        response = HTMLResponse(
+                            '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+                            f"<title>请稍后重试</title><p>{exc.message}</p>"
+                            '<a href="/login">返回登录</a></html>',
+                            status_code=exc.status,
+                            headers=headers,
+                        )
+                    else:
+                        response = JSONResponse(content, status_code=exc.status, headers=headers)
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
 
 
 class BodyLimitMiddleware:
-    def __init__(self, app: ASGIApp, max_bytes: int, upload_max_bytes: int | None = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_bytes: int,
+        upload_max_bytes: int | None = None,
+        body_timeout_seconds: int = 15,
+    ) -> None:
         self.app = app
         self.max_bytes = max_bytes
         self.upload_max_bytes = upload_max_bytes or max_bytes
+        self.body_timeout_seconds = body_timeout_seconds
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -25,20 +96,24 @@ class BodyLimitMiddleware:
         )
         limit = self.upload_max_bytes if upload else self.max_bytes
         raw_length = headers.get(b"content-length")
+        declared_error = None
         if raw_length is not None:
             try:
                 declared_length = int(raw_length)
                 if declared_length < 0:
                     raise ValueError
             except ValueError:
-                await JSONResponse({"detail": "请求长度无效"}, status_code=400)(
-                    scope, receive, send
-                )
-                return
-            if declared_length > limit:
-                await JSONResponse({"detail": "请求内容过大"}, status_code=413)(
-                    scope, receive, send
-                )
+                declared_error = MediaError("请求长度无效", "invalid_input", 400)
+            else:
+                if declared_length > limit:
+                    declared_error = MediaError("请求内容过大", "size_limit", 413)
+            # An existing upload reservation must pass ownership checks, then fail
+            # through receive() so its slot and quota are released without reading bytes.
+            if declared_error and not (upload and scope["path"] != "/api/tasks/upload"):
+                await JSONResponse(
+                    {"detail": declared_error.message, "code": declared_error.code},
+                    status_code=declared_error.status,
+                )(scope, receive, send)
                 return
 
         if upload:
@@ -46,6 +121,8 @@ class BodyLimitMiddleware:
 
             async def bounded_receive() -> dict:
                 nonlocal received
+                if declared_error is not None:
+                    raise declared_error
                 message = await receive()
                 received += len(message.get("body", b""))
                 if received > limit:
@@ -57,19 +134,26 @@ class BodyLimitMiddleware:
 
         messages = []
         total = 0
-        while True:
-            message = await receive()
-            if message["type"] == "http.disconnect":
-                return
-            total += len(message.get("body", b""))
-            if total > self.max_bytes:
-                await JSONResponse({"detail": "请求内容过大"}, status_code=413)(
-                    scope, receive, send
-                )
-                return
-            messages.append(message)
-            if not message.get("more_body", False):
-                break
+        try:
+            async with asyncio.timeout(self.body_timeout_seconds):
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.disconnect":
+                        return
+                    total += len(message.get("body", b""))
+                    if total > self.max_bytes:
+                        await JSONResponse({"detail": "请求内容过大"}, status_code=413)(
+                            scope, receive, send
+                        )
+                        return
+                    messages.append(message)
+                    if not message.get("more_body", False):
+                        break
+        except TimeoutError:
+            await JSONResponse({"detail": "请求接收超时", "code": "body_timeout"}, status_code=408)(
+                scope, receive, send
+            )
+            return
         pending = iter(messages)
 
         async def replay() -> dict:

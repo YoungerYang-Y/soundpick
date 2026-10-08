@@ -6,6 +6,8 @@
 |--------|------|------|----------|------|
 | 0.1.0 | main（本地实施） | 实施中 | 2026-10-02 | [音频提取 MVP](./0.1.0/audio-extraction/plan.md) |
 
+0.1.0 生产额度与请求防护的规格、设计和实施计划见[生产额度与防刷](./0.1.0/production-protection/plan.md)；本地270项严格回归和47个前端场景通过，未连接生产 Redis、未部署。长期约束记录为 [生产额度与请求防护决策](../design-docs/arch-production-protection.md)（verified）。
+
 当前实现与逐项验收证据见 [MVP 验收记录](./0.1.0/audio-extraction/acceptance.md)：
 
 - 已通过：本地真实转码、抖音与当前火山版各一个实网样本、实际容器构建和媒体运行。

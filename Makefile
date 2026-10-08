@@ -7,7 +7,7 @@ env:
 	.venv/bin/python scripts/init_env.py
 
 dev:
-	.venv/bin/python -m uvicorn app.main:create_app --factory --reload --host 127.0.0.1 --port 8000
+	.venv/bin/python -m uvicorn app.main:create_app --factory --reload --host 127.0.0.1 --port 8000 --no-proxy-headers
 
 test:
 	.venv/bin/python -m scripts.run_tests

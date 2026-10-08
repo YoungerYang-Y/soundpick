@@ -32,3 +32,36 @@ def test_media_limits_are_bounded_and_provider_keys_remain_secret(settings):
         **{**settings.model_dump(), "parser_api_token": "private-parser-key"}, _env_file=None
     )
     assert "private-parser-key" not in repr(configured)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "redis://:private-redis-secret@localhost:6379/2",
+        "rediss://user:private-redis-secret@localhost:6379?db=2",
+    ],
+)
+def test_redis_credentials_stay_secret_and_safe_urls_are_accepted(settings, url):
+    configured = Settings(**{**settings.model_dump(), "redis_url": url}, _env_file=None)
+    assert configured.redis_url.get_secret_value() == url
+    assert "private-redis-secret" not in repr(configured)
+    assert configured.redis_timeout_seconds == 0.1
+    assert configured.redis_retry_seconds == 30
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://:private-redis-secret@localhost/0",
+        "redis://:private-redis-secret@localhost/0?socket_timeout=300",
+        "rediss://:private-redis-secret@localhost/0?ssl_cert_reqs=none",
+        "redis://:private-redis-secret@localhost:invalid/0",
+        "redis://:private-redis-secret@localhost/not-a-db",
+        "redis://:private-redis-secret@localhost/0?db=0&db=1",
+        "redis://:private-redis-secret@localhost/0#fragment",
+    ],
+)
+def test_redis_url_cannot_override_timeouts_or_tls(settings, url):
+    with pytest.raises(ValidationError) as exc:
+        Settings(**{**settings.model_dump(), "redis_url": url}, _env_file=None)
+    assert "private-redis-secret" not in str(exc.value)

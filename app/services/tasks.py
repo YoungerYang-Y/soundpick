@@ -21,6 +21,7 @@ from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
 from app.services.errors import MediaError
 from app.services.media import MediaProcessor
 from app.services.network import SafeHTTP, public_url
+from app.services.protection import ProtectionStore
 
 TaskState = Literal[
     "receiving", "resolving", "downloading", "converting", "ready", "failed", "cancelled"
@@ -71,6 +72,13 @@ class TaskManager:
         self.tasks: dict[str, Task] = {}
         self.cleaner: asyncio.Task | None = None
         self.lock = None
+        self.protection = ProtectionStore(
+            redis_url=settings.redis_url.get_secret_value(),
+            key_prefix=settings.redis_key_prefix,
+            timeout_seconds=settings.redis_timeout_seconds,
+            retry_seconds=settings.redis_retry_seconds,
+        )
+        self.quota_releases: set[str] = set()
 
     async def open(self) -> None:
         if self.root.is_symlink():
@@ -86,14 +94,18 @@ class TaskManager:
             self.lock = None
             raise RuntimeError("同一任务目录只支持一个应用进程") from None
         try:
+            self.protection.open()
             for path in self.root.iterdir():
                 if re.fullmatch(r"[a-f0-9]{32}", path.name):
                     if path.is_symlink():
                         path.unlink()
                     elif path.is_dir():
                         shutil.rmtree(path)
+            self.protection.recover()
+            self.quota_releases.clear()
             self.cleaner = asyncio.create_task(self._clean_loop())
         except BaseException:
+            self.protection.close()
             self.lock.close()
             self.lock = None
             raise
@@ -101,8 +113,19 @@ class TaskManager:
     async def _clean_loop(self) -> None:
         while True:
             await asyncio.sleep(30)
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError, MediaError):
                 await self.sweep()
+
+    def _release_quota(self, task_id: str) -> None:
+        try:
+            self.protection.release(task_id)
+        except MediaError:
+            # At most ten reservations can be outstanding. Keep their IDs until
+            # storage recovers; deleting media must not lose the release obligation.
+            self.quota_releases.add(task_id)
+            logger.warning("quota release deferred", extra={"task_id": task_id})
+        else:
+            self.quota_releases.discard(task_id)
 
     def _remove(self, task: Task) -> None:
         try:
@@ -114,6 +137,8 @@ class TaskManager:
             task.cleanup_pending = True
 
     def _sweep(self) -> None:
+        for task_id in list(self.quota_releases):
+            self._release_quota(task_id)
         now = time.time()
         for task in list(self.tasks.values()):
             if (
@@ -164,9 +189,11 @@ class TaskManager:
             raise MediaError("临时结果已满，请等待旧结果到期后再试", "capacity", 409)
         task_id = task_id or secrets.token_hex(16)
         directory = self.root / task_id
+        self.protection.reserve(task_id)
         try:
             directory.mkdir(mode=0o700)
         except OSError:
+            self._release_quota(task_id)
             raise MediaError("临时存储不可用，请稍后重试", "storage_error", 503) from None
         title = title.encode("utf-8", errors="replace").decode("utf-8")
         task = Task(
@@ -237,10 +264,17 @@ class TaskManager:
         )
 
     def _finish(self, task: Task, state: TaskState, message: str) -> None:
+        if state == "ready":
+            # Persist success before any response can expose the downloadable result.
+            self.protection.succeed(task.id)
+        else:
+            self._release_quota(task.id)
+            self._stage(task, state, message)
+            task.expires_at = time.time() + self.settings.result_ttl_seconds
+            self._remove(task)
+            return
         self._stage(task, state, message)
         task.expires_at = time.time() + self.settings.result_ttl_seconds
-        if state != "ready":
-            self._remove(task)
 
     async def receive(self, task: Task, stream: AsyncIterator[bytes]) -> None:
         self._sweep()
@@ -358,11 +392,11 @@ class TaskManager:
         await self.sweep()
 
     async def close(self) -> None:
-        if self.cleaner:
-            self.cleaner.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.cleaner
         try:
+            if self.cleaner:
+                self.cleaner.cancel()
+                with contextlib.suppress(asyncio.CancelledError, MediaError, OSError):
+                    await self.cleaner
             for task in list(self.tasks.values()):
                 await self.cancel(task)
                 task.expires_at = time.time()
@@ -370,6 +404,9 @@ class TaskManager:
                     self._remove(task)
             self._sweep()
         finally:
-            if self.lock:
-                self.lock.close()
-                self.lock = None
+            try:
+                self.protection.close()
+            finally:
+                if self.lock:
+                    self.lock.close()
+                    self.lock = None

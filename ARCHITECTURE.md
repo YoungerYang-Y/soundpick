@@ -12,9 +12,9 @@
 | 范围外 | AI 去人声、裁剪、批量、个人账号、历史记录 |
 | Web | FastAPI 页面与 JSON 接口、Jinja2 HTML、原生 JavaScript |
 | 配置 / 认证 | pydantic-settings 环境配置；共享密码、签名 Session Cookie |
-| 基础设施 | 无数据库、Redis、前端构建；Python 3.14 slim 容器，内置 FFmpeg / FFprobe，非 root |
-| 运行模型 | 单实例、单进程、内存任务；同一数据目录加进程锁；仅一个接收或处理任务 |
-| 重启 | 不恢复任务 |
+| 基础设施 | 可选 Redis 保存保护账本；未配置或 Redis 故障时使用有界进程内保护；无前端构建；Python 3.14 slim 容器，内置 FFmpeg / FFprobe，非 root |
+| 运行模型 | 单实例、单进程、内存任务；本地任务目录加进程锁；仅一个接收或处理任务；共享 Redis 的部署须使用独立 key prefix |
+| 重启 | 不恢复任务；Redis 正常且其 AOF/RDB 持久化可用时保护状态跨重启保留；故障期间的内存额度和限频会丢失 |
 
 - **已验证**：媒体主链路、本地真实 FFmpeg、抖音与当前火山版共用域各一个原音轨样本。
 - **待验收 / 限制**：手机真机待完成；旧火山域样本未恢复。
@@ -30,7 +30,7 @@ soundpick/
 │   ├── config.py               # 环境配置与安全校验
 │   ├── middleware.py           # 小请求上限与上传流实际字节边界
 │   ├── resolver/               # 分享识别、平台适配与可配置 JSON provider
-│   ├── services/               # tasks、media、network 和公开错误
+│   ├── services/               # tasks、media、network、保护账本和公开错误
 │   ├── templates/              # Jinja2 页面
 │   └── static/                 # 原生浏览器脚本和样式
 ├── scripts/                    # 本地环境准备与配置初始化
@@ -45,11 +45,17 @@ soundpick/
 ```mermaid
 flowchart TD
   Browser[浏览器] --> Router[页面与 API 路由]
+  Router --> Guard[早期限频与请求体边界]
+  Guard --> Protection[保护存储选择器]
   Router --> Auth[认证与配置]
   Router --> Service[媒体任务服务]
   Service --> Resolver[平台解析器]
   Service --> Media[FFprobe / FFmpeg]
-  Service --> TempFiles[临时文件]
+  Service --> TempFiles[临时媒体文件]
+  Service --> Protection
+  Protection -->|Redis 已配置且可用| Redis[(Redis 保护账本)]
+  Protection -->|未配置或故障降级| Memory[有界进程内保护]
+  Redis --> Persistence[AOF / RDB 由 Redis 部署负责]
 ```
 
 **依赖规则：**
@@ -81,10 +87,11 @@ flowchart TD
 | 模块 | 职责 | 依赖 |
 |------|------|------|
 | `app/main.py` | 应用工厂、路由装配、HTTP 输入输出 | 配置、认证、静态与模板资源 |
-| `app/auth.py`、`app/middleware.py` | 共享密码会话、CSRF、登录限速和请求体边界 | 配置、Starlette |
+| `app/auth.py`、`app/middleware.py` | 共享密码会话、CSRF、早期限频和请求体边界 | 配置、保护账本、Starlette |
 | `app/config.py` | 加载和校验运行配置 | pydantic-settings |
 | `app/resolver/` | 分享识别、平台原视频地址适配，排除错误 ID/BGM | 安全网络、resolver 基础契约 |
 | `app/services/tasks.py` | 单活动任务、会话所属结果、容量、取消与清理 | media、resolver、network、临时文件系统 |
+| `app/services/protection.py` | 北京日成功额度预占/确认/释放、接口限频及 Redis 故障降级 | 可选 Redis、进程内有界保护 |
 | `app/services/media.py` | 视频/声音流、时长与完整 MP3 校验、原 MP4 保留或无损封装，子进程回收 | FFmpeg/FFprobe、配置 |
 | `app/services/network.py` | 公网 DNS 固定、逐跳校验、有限响应与流式下载 | httpx |
 | `app/templates/`、`app/static/` | 手机优先页面与交互 | 页面/API 契约 |
@@ -99,6 +106,7 @@ flowchart TD
 | 网络回退 | 仅连接失败时换用其他已校验公网地址；逐跳隔离 Cookie 与连接池 | 同上 |
 | 浏览器恢复 | `sessionStorage` 仅保存当前任务 ID 与确认 / 取消标记；刷新查询，不重传 | 同上 |
 | 恢复边界 | 不保存媒体、分享内容或历史；服务器重启不恢复任务 | 同上 |
+| 生产额度与防刷 | 北京日全站成功 10 首；Redis 可用时共享持久保护状态，故障时有界内存降级；媒体历史不落库 | [生产额度与防刷](docs/design-docs/arch-production-protection.md) |
 | 双媒体交付 | 同一任务；不增加网络抓取或持久存储；临时交付见下述任务决策 | [MP4 设计](./docs/active/0.1.0/video-download/design.md) |
 
 ## 审查修复后的约束

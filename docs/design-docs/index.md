@@ -6,6 +6,7 @@
 |----|------|--------|-------|----------|------|
 | review-hardening | 任务确认、媒体有效性与可测试性 | verified | project | 0.1.0 审查修复与回归约束 | [`arch-review-hardening.md`](./arch-review-hardening.md) |
 | runtime-recovery | 运行能力、网络回退与当前任务恢复 | verified | project | 0.1.0 系统性优化，本地实现与回归已核对 | [`arch-runtime-recovery.md`](./arch-runtime-recovery.md) |
+| production-protection | 生产额度、请求限频与代理信任边界 | verified | project | 0.1.0 Redis及内存降级保护，本地实现与回归已核对 | [`arch-production-protection.md`](./arch-production-protection.md) |
 
 ## 状态含义
 
