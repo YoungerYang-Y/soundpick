@@ -199,6 +199,16 @@ class RedisBackend:
                 )
             return self._client
 
+    def probe(self) -> None:
+        """Check connection and Lua/MEMORY support without changing protection data."""
+        result = self._get_client().eval(
+            "return redis.call('MEMORY', 'USAGE', KEYS[1]) or 0",
+            1,
+            f"{self.key_prefix}:quota",
+        )
+        if not isinstance(result, int) or result < 0:
+            raise ValueError("Invalid Redis diagnostic response")
+
     def quota(
         self, operation: str, task_id: str = "", snapshot: Mapping[str, str] | None = None
     ) -> dict[str, str]:

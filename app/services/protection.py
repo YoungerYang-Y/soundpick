@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 
 from app.services.errors import MediaError
 from app.services.memory_protection import DAILY_SUCCESS_LIMIT, MemoryProtection
+from app.services.redis_diagnostics import FAILURE_MESSAGES, redis_failure_reason
 
 __all__ = ["DAILY_SUCCESS_LIMIT", "ProtectionStore"]
 logger = logging.getLogger(__name__)
@@ -87,10 +88,10 @@ class ProtectionStore:
                 except MediaError:
                     self.memory.set_quota(previous)
                     raise
-                except Exception:
+                except Exception as error:
                     # A timeout can follow a committed write. Keep the local operation;
                     # ID-based reconciliation makes reserve/succeed/release idempotent.
-                    self._degrade()
+                    self._degrade(error)
 
     def check_rate(self, groups: str | Sequence[str], identity: str) -> None:
         with self._lock:
@@ -109,8 +110,8 @@ class ProtectionStore:
                 except MediaError as error:
                     if local_error is None or error.retry_after > local_error.retry_after:
                         raise
-                except Exception:
-                    self._degrade()
+                except Exception as error:
+                    self._degrade(error)
             if local_error is not None:
                 raise local_error
             self.memory.check_rate(groups, identity)
@@ -132,15 +133,21 @@ class ProtectionStore:
             # local reservations. No failure/release queue can grow during an outage.
             snapshot = self._backend.quota("merge", "", self.memory.quota_snapshot())
             self.memory.set_quota(snapshot)
-        except Exception:
-            self._degrade()
+        except Exception as error:
+            self._degrade(error)
             return
         self._connected = True
         logger.info("防刷存储使用 Redis；内存额度已合并")
 
-    def _degrade(self) -> None:
-        # Log only transitions/probes, never connection strings or exception details.
-        logger.warning("Redis 防刷存储不可用，使用内存保护；稍后重试")
+    def _degrade(self, error: Exception) -> None:
+        # Fixed categories/messages only: exception details can contain credentials.
+        reason = redis_failure_reason(error)
+        logger.warning(
+            "Redis 防刷存储不可用（reason=%s：%s），使用内存保护；%g 秒后允许重试",
+            reason,
+            FAILURE_MESSAGES[reason],
+            self.retry_seconds,
+        )
         self._connected = False
         self._next_retry = self.retry_clock() + self.retry_seconds
 

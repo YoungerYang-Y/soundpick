@@ -90,9 +90,10 @@ class BodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
+        # Match the route shape; invalid task IDs must be rejected without receiving bytes.
         upload = scope["method"] == "POST" and (
             scope["path"] == "/api/tasks/upload"
-            or re.fullmatch(r"/api/tasks/[a-f0-9]{32}/upload", scope["path"]) is not None
+            or re.fullmatch(r"/api/tasks/[^/]+/upload", scope["path"]) is not None
         )
         limit = self.upload_max_bytes if upload else self.max_bytes
         raw_length = headers.get(b"content-length")

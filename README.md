@@ -99,11 +99,18 @@ FFMPEG_BIN=/absolute/path/to/ffmpeg
 FFPROBE_BIN=/absolute/path/to/ffprobe
 ```
 
-| 媒体工具 | 行为 |
+| 运行检查 | 行为 |
 | --- | --- |
 | 启动检查 | 实际执行 FFmpeg / FFprobe，验证 MP3 编码器 |
 | 未就绪 | 页面可访问；创建任务返回 503 |
-| 本地诊断 | `make runtime-check` |
+| 本地诊断 | `make runtime-check`；分别报告媒体工具与 Redis 状态 |
+| Redis 未配置 | 自检说明使用内存保护，不尝试连接 Redis |
+| Redis 已配置 | 按原超时执行只读 Lua/MEMORY 探测，不修改额度、预约或限频状态 |
+| 自检退出码 | 媒体及配置的 Redis 检查通过返回 0；任一失败返回 1，Redis 故障仍允许应用启动并降级 |
+
+- Python 依赖有变更时重新运行 `./scripts/setup.sh`；仅设置 `REDIS_URL` 不能补齐缺失的客户端。
+- Redis 失败日志和自检使用固定 `reason` 分类：`client_unavailable`（客户端无法导入）、`timeout`（超时）、`authentication`（认证失败）、`permission`（权限不足）、`connection`（连接失败）。不输出连接串或原始异常。
+- 只读检查通过不证明写入权限、Redis 持久化或连接长期稳定。间歇建连超时应检查链路与 Redis 入口；增加超时会延长同步等待，不能代替定位。
 
 ### 使用
 
