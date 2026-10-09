@@ -21,10 +21,23 @@ async function freePort() {
   return port;
 }
 
+async function stopServer(server) {
+  if (!server || server.exitCode !== null || server.signalCode !== null) return;
+  const stopped = once(server, 'exit');
+  server.kill('SIGTERM');
+  const forced = setTimeout(() => server.kill('SIGKILL'), 10000);
+  try { await stopped; } finally { clearTimeout(forced); }
+}
+
 async function main() {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'soundpick-browser-'));
   let server, browser;
+  let redisConnections = 0;
+  const redisCanary = net.createServer(socket => { redisConnections++; socket.destroy(); });
   try {
+    await new Promise(resolve => redisCanary.listen(0, '127.0.0.1', resolve));
+    const inheritedEnvironment = {...process.env,
+      REDIS_URL: `redis://127.0.0.1:${redisCanary.address().port}`};
     const source = path.join(temporary, '完整视频.mp4');
     const ffmpeg = process.env.FFMPEG_BIN || 'ffmpeg';
     const realFFmpeg = execFileSync(python, ['-c', 'import shutil,sys;print(shutil.which(sys.argv[1]) or "")', ffmpeg], {encoding:'utf8'}).trim();
@@ -32,25 +45,29 @@ async function main() {
     execFileSync(realFFmpeg, ['-nostdin','-v','error','-f','lavfi','-i','color=c=red:s=160x120:r=10:d=3','-f','lavfi','-i','sine=frequency=440:duration=3','-c:v','mpeg4','-c:a','aac',source], {timeout:15000});
     const paced = path.join(temporary, 'paced-ffmpeg');
     fs.writeFileSync(paced, `#!${python}\nimport os,sys\nargs=sys.argv[1:]\nif '-i' in args: args.insert(args.index('-i'), '-re')\nos.execv(${JSON.stringify(realFFmpeg)},[${JSON.stringify(realFFmpeg)},*args])\n`, {mode:0o700});
-    const port = await freePort();
-    const base = `http://127.0.0.1:${port}`;
     const password = 'isolated-browser-test-password';
-    server = spawn(python, ['-m','uvicorn','app.main:create_app','--factory','--host','127.0.0.1','--port',String(port),'--no-access-log'], {
-      cwd:root, stdio:['ignore','ignore','ignore'], env:{...process.env, APP_ENV:'local', COOKIE_SECURE:'false', APP_PASSWORD:password, SESSION_SECRET:'isolated-browser-session-secret'.repeat(3), DATA_DIR:path.join(temporary,'data'), FFMPEG_BIN:paced}
-    });
     browser = await chromium.launch({headless:true, ...(process.env.SOUNDPICK_CHROMIUM_BIN ? {executablePath:process.env.SOUNDPICK_CHROMIUM_BIN} : {})});
-    // Navigation retries only wait for the isolated server; test steps use observable conditions.
-    const readiness = await browser.newContext();
-    const deadline = Date.now() + 10000;
-    while (true) {
-      assert.equal(server.exitCode, null, 'isolated server exited during startup');
-      try { if ((await readiness.request.get(`${base}/healthz`)).status() === 200) break; }
-      catch (error) { if (Date.now() >= deadline) throw error; }
-      assert.ok(Date.now() < deadline, 'isolated server did not become ready');
-    }
-    await readiness.close();
 
     for (let iteration=0; iteration<repeats; iteration++) {
+      // Every repeat owns its process, data and memory protection windows.
+      const port = await freePort();
+      const base = `http://127.0.0.1:${port}`;
+      const dataDirectory = path.join(temporary, `data-${iteration}`);
+      server = spawn(python, ['-m','uvicorn','app.main:create_app','--factory','--host','127.0.0.1','--port',String(port),'--no-access-log','--no-proxy-headers'], {
+        cwd:root, stdio:['ignore','ignore','ignore'], env:{...inheritedEnvironment, APP_ENV:'local', COOKIE_SECURE:'false', APP_PASSWORD:password, SESSION_SECRET:'isolated-browser-session-secret'.repeat(3), DATA_DIR:dataDirectory, FFMPEG_BIN:paced, REDIS_URL:''}
+      });
+      // Navigation retries only wait for this round's server.
+      const readiness = await browser.newContext();
+      try {
+        const deadline = Date.now() + 10000;
+        while (true) {
+          assert.equal(server.exitCode, null, 'isolated server exited during startup');
+          assert.equal(server.signalCode, null, 'isolated server terminated during startup');
+          try { if ((await readiness.request.get(`${base}/healthz`)).status() === 200) break; }
+          catch (error) { if (Date.now() >= deadline) throw error; }
+          assert.ok(Date.now() < deadline, 'isolated server did not become ready');
+        }
+      } finally { await readiness.close(); }
       const context = await browser.newContext({viewport:{width:375,height:812}});
       try {
         const page = await context.newPage();
@@ -158,19 +175,17 @@ async function main() {
         await page.waitForFunction(() => document.getElementById('task-heading').textContent.includes('已取消'));
         const taskResponse = await context.request.get(`${base}/api/tasks/${taskID}`);
         assert.equal((await taskResponse.json()).state,'cancelled');
-        assert.equal(fs.existsSync(path.join(temporary,'data','.soundpick-tasks',taskID)),false);
+        assert.equal(fs.existsSync(path.join(dataDirectory,'.soundpick-tasks',taskID)),false);
         assert.deepEqual(errors,[]);
         console.log(`PASS browser ${iteration+1}/${repeats}: late-202 result protection, single upload, reload recovery, MP3 preview, exact MP4 download, lost-202 cancellation, filesystem cleanup, responsive widths`);
-      } finally { await context.close(); }
+      } finally { await context.close(); await stopServer(server); }
     }
+    assert.equal(redisConnections, 0, 'browser test servers must not connect to inherited Redis');
+    console.log('PASS: isolated browser servers made zero Redis canary connections');
   } finally {
     if (browser) await browser.close();
-    if (server && server.exitCode === null) {
-      const stopped = once(server,'exit');
-      server.kill('SIGTERM');
-      const forced = setTimeout(() => server.kill('SIGKILL'), 10000);
-      try { await stopped; } finally { clearTimeout(forced); }
-    }
+    await stopServer(server);
+    if (redisCanary.listening) await new Promise(resolve => redisCanary.close(resolve));
     fs.rmSync(temporary,{recursive:true,force:true});
   }
 }

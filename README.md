@@ -239,7 +239,8 @@ mise exec -- make browser-check
 | --- | --- |
 | `SOUNDPICK_NODE_BIN` | 必要时指定 Node 路径 |
 | `SOUNDPICK_BROWSER_REPEAT` | 大于 1 的整数；默认 5 轮 |
-| 浏览器隔离 | 独立回环服务与临时数据；不使用开发服务 |
+| 浏览器隔离 | 每轮独立回环进程、临时目录与内存限频；测试子服务显式禁用 Redis，不使用部署账本 |
+| Redis 隔离回归 | 真实 HTTP 与浏览器检查注入本地 Redis 连接陷阱，确认测试子服务不连接继承的 Redis 地址 |
 | 覆盖率 | `work/coverage/`（已忽略）；不含 JavaScript 和媒体子进程内部 |
 
 依赖锁定在 `requirements.lock` 和 `requirements-dev.lock`。修改 `pyproject.toml` 后须同步重新解析锁文件。

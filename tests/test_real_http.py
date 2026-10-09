@@ -5,6 +5,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -16,7 +17,38 @@ from tests.test_media import real_video
 from tests.test_mvp_flow import wait_terminal
 
 
-def test_real_http_cancel_reaps_ffmpeg_and_allows_retry(real_tools, tmp_path):
+@pytest.fixture
+def inherited_redis_canary(monkeypatch):
+    """A local connection trap proves the child never uses inherited Redis settings."""
+    connected = threading.Event()
+    stopped = threading.Event()
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(0.1)
+        monkeypatch.setenv("REDIS_URL", f"redis://127.0.0.1:{listener.getsockname()[1]}")
+
+        def watch():
+            while not stopped.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                connected.set()
+                connection.close()
+
+        watcher = threading.Thread(target=watch)
+        watcher.start()
+        try:
+            yield connected
+        finally:
+            stopped.set()
+            watcher.join(timeout=2)
+
+
+def test_real_http_cancel_reaps_ffmpeg_and_allows_retry(
+    real_tools, tmp_path, inherited_redis_canary
+):
     source = real_video(tmp_path, real_tools)
     executable = shutil.which(real_tools.ffmpeg_bin)
     marker = tmp_path / "ffmpeg.pid"
@@ -42,6 +74,7 @@ os.execv({executable!r}, [{executable!r}, *args])
         "DATA_DIR": str(real_tools.data_dir),
         "FFMPEG_BIN": str(wrapper),
         "FFPROBE_BIN": real_tools.ffprobe_bin,
+        "REDIS_URL": "",  # Override both inherited environment and the repository .env.
     }
     server = subprocess.Popen(
         [
@@ -132,3 +165,4 @@ os.execv({executable!r}, [{executable!r}, *args])
             server.wait(timeout=5)
     assert not list((real_tools.data_dir / ".soundpick-tasks").glob("*/input"))
     assert not list((real_tools.data_dir / ".soundpick-tasks").glob("*/audio.mp3"))
+    assert not inherited_redis_canary.is_set(), "Test server must not connect to inherited Redis"
