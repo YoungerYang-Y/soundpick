@@ -154,7 +154,7 @@ function initialize() {
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
       const task = await api(`/api/tasks/${state.task.id}`, { signal: controller.signal });
-      if (version !== state.generation) return;
+      if (version !== state.generation || state.pollController !== controller) return;
       state.restoring = false;
       state.creation.confirmed = true;
       // A status lookup supersedes the original creation response snapshot.
@@ -164,7 +164,7 @@ function initialize() {
       if (state.cancelRequested && state.busy) { await cancelTask(); return; }
       if (task.state === 'receiving' && state.creation.file) { await sendUpload(state.creation, version); return; }
     } catch (error) {
-      if (version !== state.generation) return;
+      if (version !== state.generation || state.pollController !== controller) return;
       if (failRestorationAuthentication(error)) return;
       if (error.status === 404 && wasConfirmed) return markExpired();
       view.disconnected(error.status === 404

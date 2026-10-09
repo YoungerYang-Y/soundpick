@@ -487,6 +487,38 @@ test('a delayed cancelled poll cannot overwrite the server cancellation result',
   assert.equal(h.ui['task-heading'].textContent, '已取消处理'); assert.equal(h.ui['task-message'].textContent, message);
   assert.equal(h.ui['reconnect-button'].hidden, true);
 });
+test('polls started by online or visibility restoration during cancellation cannot replace its terminal result', async () => {
+  for (const trigger of ['online', 'visibilitychange']) for (const status of ['ready', 'cancelled']) for (const outcome of ['abort', 'success']) {
+    const h = await harness(); await startLink(h);
+    const cancellation = deferred(); h.queue(`${taskPath}/cancel`, cancellation);
+    const cancelling = h.click('cancel-button'); await flush();
+
+    const poll = deferred(); h.queue(taskPath, poll, { delayAbort: true });
+    if (trigger === 'visibilitychange') h.document.hidden = true;
+    await (trigger === 'online' ? h.window : h.document).trigger(trigger);
+    if (trigger === 'visibilitychange') {
+      h.document.hidden = false;
+      await h.document.trigger(trigger);
+    }
+    await flush();
+    assert.equal(h.requests.at(-1).path, taskPath, `${trigger} starts a status lookup while cancellation is pending`);
+
+    cancellation.resolve(h.task(status)); await cancelling; await flush();
+    const terminalMessage = h.ui['task-message'].textContent;
+    assert.equal(h.ui['new-task-button'].hidden, false);
+    assert.equal(h.ui['source-fields'].disabled, false);
+    assert.equal(h.ui['result-content'].hidden, status !== 'ready');
+    assert.equal(h.requests.at(-1).options.signal.aborted, true, 'terminal rendering aborts the overlapping lookup');
+    if (outcome === 'abort') poll.reject(Object.assign(new Error('aborted after terminal response'), { name: 'AbortError' }));
+    else poll.resolve(h.task('converting'));
+    await flush();
+
+    assert.equal(h.ui['task-message'].textContent, terminalMessage);
+    assert.equal(h.ui['reconnect-button'].hidden, true);
+    assert.equal(h.ui['new-task-button'].hidden, false);
+    assert.equal(h.ui['result-content'].hidden, status !== 'ready');
+  }
+});
 test('ready renders untrusted metadata as text and only task-bound same-origin video URLs', async () => {
   const h = await harness(); const video = `/files/${'a'.repeat(32)}?kind=video&download=1`;
   await startLink(h, 'ready', { video_download_url: video, video_filename: '来源.mp4' });
