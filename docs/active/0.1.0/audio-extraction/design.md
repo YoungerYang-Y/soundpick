@@ -3,6 +3,7 @@ id: audio-extraction
 status: verified
 owner: project
 created: 2026-10-03
+updated: 2026-10-09
 ---
 
 # MVP 技术设计
@@ -13,13 +14,15 @@ created: 2026-10-03
 
 2026-10-03 原视频 MP4 下载新增接口、字段和临时文件策略见 [补充设计](../video-download/design.md)。下述音频契约保持兼容，原视频保留与双文件交付以补充设计为准。
 
+每日成功额度、接口限频及可选 Redis 保护账本见 [生产防护设计](../production-protection/design.md)；当前任务的刷新恢复与主动放弃边界见 [运行与恢复决策](../../../design-docs/arch-runtime-recovery.md)。
+
 ## Context / Goal / Non-Goal
 
 | 项目 | 说明 |
 |---|---|
 | 基线 | 共享密码、CSRF、页面骨架可用，尚无媒体链路 |
 | 目标 | 连通两种输入到完整 MP3，并通过来源逐项验收 |
-| 边界 | 单进程家庭用途；无账户、历史查询、数据库、Redis、前端构建或持久任务队列 |
+| 边界 | 单实例单进程家庭用途；不建立个人账户、媒体历史或持久任务队列；可选 Redis 仅保存保护账本，未配置或故障时使用有界内存保护；无前端构建 |
 
 ## Architecture
 
@@ -50,6 +53,8 @@ flowchart TD
 
 错误保持 `{detail: string}`，可加 `code: string`；不输出上游响应/密钥/原始异常。写请求使用 `X-CSRF-Token`。
 
+以下接口还受生产防护约束：限频或每日额度超限返回 429，携带 `Retry-After` 和 JSON `retry_after`；具体预算与故障降级见 [生产防护设计](../production-protection/design.md)。
+
 | 接口 / 对应 Behavior | 输入 | 成功返回 | 失败 / 幂等语义 |
 |---|---|---|---|
 | GET /api/capabilities / 创建输入任务 | 无 | extraction_available, planned_inputs, platforms, limits, media_available | 未登录 401；平台可用表示已配置路径，实网验收单独报告 |
@@ -77,6 +82,7 @@ capabilities schema（字段类型）：
     configured: bool
   }],
   limits: {
+    daily_success_limit: int,
     max_media_bytes: int,
     max_duration_seconds: int,
     result_ttl_seconds: int,
@@ -105,7 +111,7 @@ capabilities schema（字段类型）：
 | 契约 | 签名 | 语义 |
 |---|---|---|
 | ResolvedVideo | `ResolvedVideo(video_url: str, title: str='', author: str='', original_audio_url: str\|None=None)` | 沿用基线；MVP 一律下载 video_url，不使用音频候选 |
-| MediaError | `MediaError(message: str, code: str='media_error', status: int=422)` | 可公开失败；解析失败 code=resolve_failed，网络失败 network_error，时长越界 duration_limit；取消使用 asyncio.CancelledError，不包装为成功 |
+| MediaError | `MediaError(message: str, code: str='media_error', status: int=422, *, retry_after: int\|None=None)` | 可公开失败；解析失败 code=resolve_failed，网络失败 network_error，时长越界 duration_limit；限额错误带等待秒数；取消使用 asyncio.CancelledError，不包装为成功 |
 | SafeHTTP.fetch | `SafeHTTP.fetch(url: str, *, max_bytes: int=2097152, headers: dict\|None=None, follow_redirects: bool=True) -> HTTPPage(url:str,status:int,headers:dict,body:bytes)` | 失败 MediaError |
 | SafeHTTP.download | `SafeHTTP.download(url: str, target: Path, max_bytes: int) -> None` | 有上限的流写本地；失败不留部分文件 |
 
@@ -115,7 +121,8 @@ MediaProcessor：
 |---|---|
 | 能力 | `MediaProcessor(settings: Settings).available: bool` |
 | 提取 | `async extract_audio(source: Path, target: Path) -> float`；返回产物时长秒数，失败 MediaError |
-| 时长 | 对比源第一条音频流时长（缺失时用容器时长）与MP3时长；允许编码填充差 max(0.25, min(2, duration*0.005)) 秒 |
+| 时长 | 首音轨缺少流级时长时，完整解码测量实际样本长度；有流级时长时先与 MP3 比较，超出容差再按样本长度复核。容器时长不替代声音长度；容差为 max(0.25, min(2, duration*0.005)) 秒，复核后仍不匹配则拒绝为截断 |
+| 测量边界 | 样本测量只读取首音轨、输出至 null，共享任务总超时、64 KiB 输出上限和子进程取消回收；源流级/容器时长及测量所得声音长度均须满足最大时长限制 |
 | 职责 | magic/视频+音频/时长/完整性检查；不负责删除source；取消必须回收子进程 |
 | 配置名 | `ffmpeg_bin`/`ffprobe_bin`、`max_duration_seconds`、`max_media_bytes`、`task_timeout_seconds` |
 
@@ -147,7 +154,7 @@ Task 内部：
 | expires_at | UTC timestamp |
 | 运行与交付 | asyncio runner；delivery引用计数 |
 
-无数据库/索引；字典按 id 查询，owner 匹配后才能响应。
+任务状态只保存在进程内字典，按 id 查询，owner 匹配后才能响应；不跨重启恢复。可选 Redis 仅持久保存保护账本，不保存任务或媒体历史。
 
 TaskView：`{id,state,message,title,author,duration_seconds,expires_at,preview_url,download_url,filename}`。
 
@@ -194,7 +201,7 @@ TaskView：`{id,state,message,title,author,duration_seconds,expires_at,preview_u
 | 方案 | 优点 | 代价 / 决定 |
 |---|---|---|
 | 同步等待完整提取 | 接口少 | 手机长等待/代理超时，选异步任务轮询 |
-| 队列/数据库 | 恢复及多实例 | 家庭MVP无需，暂不引入 |
+| 持久任务队列/媒体数据库 | 恢复任务及多实例 | 家庭 MVP 不引入；可选 Redis 保护账本不用于恢复媒体任务 |
 | 平台music字段 | 易获得音频 | 无法证明完整原音轨，禁止 |
 | multipart UploadFile | 常见 | 解析前可能缓冲超大body，选择受限原始流上传 |
 
