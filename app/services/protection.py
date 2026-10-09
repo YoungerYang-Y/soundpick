@@ -95,15 +95,24 @@ class ProtectionStore:
     def check_rate(self, groups: str | Sequence[str], identity: str) -> None:
         with self._lock:
             self._require_open()
-            self.memory.check_rate(groups, identity, record=False)
+            local_error = None
+            try:
+                self.memory.check_rate(groups, identity, record=False)
+            except MediaError as error:
+                local_error = error
             self._ensure_remote()
             if self._connected:
                 try:
-                    self._backend.check_rate(groups, identity)
-                except MediaError:
-                    raise
+                    # A locally denied request only probes the remote wait; it must
+                    # not consume any remote budget, even when Redis would allow it.
+                    self._backend.check_rate(groups, identity, record=local_error is None)
+                except MediaError as error:
+                    if local_error is None or error.retry_after > local_error.retry_after:
+                        raise
                 except Exception:
                     self._degrade()
+            if local_error is not None:
+                raise local_error
             self.memory.check_rate(groups, identity)
 
     def _ensure_remote(self) -> None:

@@ -182,6 +182,101 @@ def test_login_has_additional_long_window_and_retry_uses_max_remaining(redis_ser
         store.close()
 
 
+def test_login_retry_after_restart_includes_remote_long_window(redis_server):
+    clock = Clock(1_735_689_600)
+    first = opened(redis_server, clock)
+    try:
+        for _ in range(2):
+            for _ in range(10):
+                first.check_rate("login", "owner")
+            clock.timestamp += 60
+    finally:
+        first.close()
+
+    second = opened(redis_server, clock)
+    try:
+        for _ in range(10):
+            second.check_rate("login", "owner")
+        with pytest.raises(MediaError) as limited:
+            second.check_rate("login", "owner")
+        assert limited.value.retry_after == 780
+        assert second.mode == "redis"
+        clock.timestamp += limited.value.retry_after
+        second.check_rate("login", "owner")
+    finally:
+        second.close()
+
+
+def test_local_multi_group_denial_does_not_consume_allowed_remote_budgets(redis_server):
+    store = opened(redis_server, Clock(1_735_689_600))
+    try:
+        for _ in range(10):
+            store.memory.check_rate("login", "owner")
+        for _ in range(2):
+            with pytest.raises(MediaError) as limited:
+                store.check_rate(("extract", "login"), "owner")
+            assert limited.value.retry_after == 60
+            assert store.mode == "redis"
+        assert not store._backend._get_client().keys(f"{store.key_prefix}:rate:*")
+        for _ in range(6):
+            store._backend.check_rate("extract", "owner")
+        for _ in range(10):
+            store._backend.check_rate("login", "owner")
+        # Neither denied request has consumed the local extract budget, either.
+        for _ in range(6):
+            store.memory.check_rate("extract", "owner")
+    finally:
+        store.close()
+
+
+def test_longer_local_wait_wins_over_remote_short_window(redis_server):
+    clock = Clock(1_735_689_600)
+    store = opened(redis_server, clock)
+    try:
+        for batch in range(3):
+            clock.timestamp = 1_735_689_600 + batch * 60
+            for _ in range(10):
+                store.memory.check_rate("login", "owner")
+        for _ in range(10):
+            store._backend.check_rate("login", "owner")
+        with pytest.raises(MediaError) as limited:
+            store.check_rate("login", "owner")
+        assert limited.value.retry_after == 780
+        assert store.mode == "redis"
+    finally:
+        store.close()
+
+
+def test_remote_wait_probe_failure_preserves_local_window_through_recovery(redis_controller):
+    clock = Clock(1_735_689_600)
+    store = opened(redis_controller.url, clock)
+    try:
+        for _ in range(10):
+            store.check_rate("login", "owner")
+        before = {key: list(events) for key, (_, events) in store.memory._rates.items()}
+        redis_controller.stop()
+        for _ in range(2):
+            with pytest.raises(MediaError) as limited:
+                store.check_rate("login", "owner")
+            assert limited.value.retry_after == 60
+            assert store.mode == "memory"
+        assert {key: list(events) for key, (_, events) in store.memory._rates.items()} == before
+        store.check_rate("poll", "owner")  # A failed diagnostic must not stop service.
+        redis_controller.start()
+        clock.timestamp += 30
+        with pytest.raises(MediaError) as limited:
+            store.check_rate("login", "owner")
+        assert limited.value.retry_after == 30
+        assert store.mode == "redis"
+        assert not store._backend._get_client().keys(f"{store.key_prefix}:rate:*")
+        for key, events in before.items():
+            assert list(store.memory._rates[key][1]) == events
+        clock.timestamp += 30
+        store.check_rate("login", "owner")
+    finally:
+        store.close()
+
+
 def test_multi_group_check_is_atomic_and_uses_longest_wait(redis_server):
     clock = Clock(1_735_689_600)
     store = opened(redis_server, clock)
@@ -436,6 +531,31 @@ def test_redis_multi_group_denial_does_not_consume_other_budget(redis_server):
             backend.check_rate("login", "owner")
         with pytest.raises(MediaError):
             backend.check_rate(("extract", "login"), "owner")
+        for _ in range(6):
+            backend.check_rate("extract", "owner")
+        with pytest.raises(MediaError):
+            backend.check_rate("extract", "owner")
+    finally:
+        backend.close()
+
+
+def test_redis_multi_group_probe_checks_all_windows_without_recording(redis_server):
+    from app.services.redis_protection import RedisBackend
+
+    clock = Clock(1_735_689_600)
+    backend = RedisBackend(redis_server, clock=clock)
+    try:
+        for _ in range(20):
+            backend.check_rate(("extract", "login"), "owner", record=False)
+        assert not backend._get_client().keys(f"{backend.key_prefix}:rate:*")
+        for batch in range(3):
+            clock.timestamp = 1_735_689_600 + batch * 60
+            for _ in range(10):
+                backend.check_rate("login", "owner")
+        for _ in range(2):
+            with pytest.raises(MediaError) as limited:
+                backend.check_rate(("extract", "login"), "owner", record=False)
+            assert limited.value.retry_after == 780
         for _ in range(6):
             backend.check_rate("extract", "owner")
         with pytest.raises(MediaError):

@@ -127,6 +127,7 @@ return {code, result}
 
 _RATE_SCRIPT = """
 local now, member = tonumber(ARGV[1]), ARGV[2]
+local record = ARGV[3] == '1'
 local retry_after = 0
 -- Validate all buckets before pruning or appending to any of them.
 for index, key in ipairs(KEYS) do
@@ -136,8 +137,8 @@ for index, key in ipairs(KEYS) do
     end
 end
 for index, key in ipairs(KEYS) do
-    local limit = tonumber(ARGV[index * 2 + 1])
-    local window = tonumber(ARGV[index * 2 + 2])
+    local limit = tonumber(ARGV[index * 2 + 2])
+    local window = tonumber(ARGV[index * 2 + 3])
     redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
     if redis.call('ZCARD', key) >= limit then
         local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
@@ -145,9 +146,9 @@ for index, key in ipairs(KEYS) do
             math.ceil(tonumber(oldest[2]) + window - now)))
     end
 end
-if retry_after > 0 then return retry_after end
+if retry_after > 0 or not record then return retry_after end
 for index, key in ipairs(KEYS) do
-    local window = tonumber(ARGV[index * 2 + 2])
+    local window = tonumber(ARGV[index * 2 + 3])
     redis.call('ZADD', key, now, member)
     redis.call('EXPIRE', key, window)
 end
@@ -275,12 +276,14 @@ class RedisBackend:
             result[task_id] = state
         return result
 
-    def check_rate(self, groups: str | Sequence[str], identity: str) -> None:
+    def check_rate(
+        self, groups: str | Sequence[str], identity: str, *, record: bool = True
+    ) -> None:
         budgets = rate_budgets(groups, identity)
         if not budgets:
             return
         keys: list[str] = []
-        arguments: list[str | float | int] = [self.clock(), uuid.uuid4().hex]
+        arguments: list[str | float | int] = [self.clock(), uuid.uuid4().hex, int(record)]
         for bucket, bucket_identity, limit, window in budgets:
             digest = hashlib.sha256(bucket_identity.encode("utf-8")).hexdigest()
             keys.append(f"{self.key_prefix}:rate:{bucket}:{digest}")
