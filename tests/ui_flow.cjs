@@ -32,6 +32,9 @@ const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve()
 async function harness(initialCapabilities = caps, options = {}) {
   const template = fs.readFileSync('app/templates/index.html', 'utf8');
   const elements = Object.fromEntries([...template.matchAll(/<[^>]*\bid="([\w-]+)"[^>]*>/g)].map(match => [match[1], new Element(match[1], {}, match[0])]));
+  for (const match of template.matchAll(/<([a-z][\w-]*)\b[^>]*\bid="([\w-]+)"[^>]*>([^<]*)<\/\1>/g)) {
+    elements[match[2]].textContent = match[3];
+  }
   const modes = ['link', 'file'].map(mode => new Element('', { mode }));
   const panels = ['link', 'file'].map(panel => { const element = elements[`${panel}-panel`]; element.dataset.panel = panel; return element; });
   const steps = ['source', 'converting', 'ready'].map(step => new Element('', { step }));
@@ -162,6 +165,125 @@ test('unconfirmed 404 stays recoverable and a cancel request survives another re
   assert.equal(restored.requests.at(-1).path, `${taskPath}/cancel`);
   assert.equal(restored.ui['task-heading'].textContent, '已取消处理');
   assert.equal(restored.ui['source-fields'].disabled, false);
+});
+
+test('abandoning unconfirmed recovery releases the page and prevents another reload lock', async () => {
+  const storage = new Map([[storedTaskKey, storedTask({ confirmed: false })]]);
+  let h;
+  for (let reload = 0; reload < 3; reload++) {
+    h = await harness(caps, { storage, queuedRoutes: [[taskPath, httpError(404)]] });
+    assert.equal(h.ui['source-fields'].disabled, true);
+    assert.equal(storage.has(storedTaskKey), true, 'a first 404 cannot silently drop an uncertain task');
+  }
+  h.queue(`${taskPath}/cancel`, httpError(404)); await h.click('cancel-button');
+  assert.ok(h.ui['abandon-recovery'], 'uncertain recovery needs an explicit inline exit');
+  assert.equal(h.ui['abandon-recovery'].hidden, false);
+  assert.match(h.ui['recovery-note'].textContent, /后台取消尚未确认/);
+  await h.click('abandon-recovery');
+  assert.equal(storage.has(storedTaskKey), false);
+  assert.equal(h.ui['source-fields'].disabled, false);
+  assert.equal(h.ui['task-panel'].hidden, true);
+  assert.match(h.ui['form-feedback'].textContent, /后台取消尚未确认/);
+  assert.equal(h.ui['share-text'].focused, true);
+  const refreshed = await harness(caps, { storage });
+  assert.equal(refreshed.ui['source-fields'].disabled, false);
+  assert.equal(refreshed.requests.length, 1, 'a refresh must not restore the abandoned task');
+});
+
+test('abandoned creation success cannot resurrect recovery storage cleared by a new rejection', async () => {
+  const h = await harness(), creation = deferred();
+  h.ui['share-text'].value = '分享链接'; h.queue('/api/tasks/link', creation);
+  const submitting = h.submit(); await flush();
+  h.queue(taskPath, httpError(404)); await h.window.trigger('online'); await flush();
+  await h.click('abandon-recovery');
+  h.queue('/api/tasks/link', httpError(400)); await h.submit();
+  assert.equal(h.storage.has(storedTaskKey), false);
+  const message = h.ui['task-message'].textContent;
+  creation.resolve(h.task('resolving')); await submitting; await flush();
+  assert.equal(h.storage.has(storedTaskKey), false, 'the abandoned operation must never write storage');
+  assert.equal(h.ui['source-fields'].disabled, false);
+  assert.equal(h.ui['task-message'].textContent, message);
+});
+
+test('abandoned link and upload reservation responses leave a newer ready task intact', async () => {
+  for (const mode of ['link', 'file']) for (const outcome of ['success', 'offline']) {
+    const h = await harness(), creation = deferred();
+    if (mode === 'file') {
+      await h.mode('file'); h.ui['video-file'].files = [new File(['video'], '旧视频.mp4')];
+    } else h.ui['share-text'].value = '旧分享链接';
+    h.queue(mode === 'file' ? '/api/tasks/reservations' : '/api/tasks/link', creation);
+    const submitting = h.submit(); await flush();
+    h.queue(taskPath, httpError(404)); await h.window.trigger('online'); await flush();
+    await h.click('abandon-recovery'); await h.mode('link');
+    const newId = 'b'.repeat(32);
+    await startLink(h, 'ready', { id: newId, preview_url: `/files/${newId}`, download_url: `/files/${newId}?download=1` });
+    const saved = h.storage.get(storedTaskKey), message = h.ui['task-message'].textContent;
+    creation.resolve(outcome === 'success' ? h.task(mode === 'file' ? 'receiving' : 'resolving') : new TypeError('offline'));
+    await submitting; await flush();
+    assert.equal(h.ui['result-content'].hidden, false);
+    assert.equal(h.ui['source-fields'].disabled, false);
+    assert.equal(h.ui['task-message'].textContent, message);
+    assert.equal(h.storage.get(storedTaskKey), saved);
+    assert.equal(h.xhrs.length, 0, 'an abandoned file cannot start uploading from a late reservation');
+  }
+});
+
+test('a new cancellation proceeds while an abandoned cancellation remains in flight', async () => {
+  const storage = new Map([[storedTaskKey, storedTask({ confirmed: false })]]), cancellation = deferred();
+  const h = await harness(caps, { storage, queuedRoutes: [[taskPath, httpError(404)]] });
+  h.queue(`${taskPath}/cancel`, cancellation);
+  const cancellingOld = h.click('cancel-button'); await flush();
+  await h.click('abandon-recovery');
+  await startLink(h);
+  const newCancellation = deferred(); h.queue(`${taskPath}/cancel`, newCancellation);
+  const cancellingNew = h.click('cancel-button'); await flush();
+  assert.equal(h.requests.filter(request => request.path === `${taskPath}/cancel`).length, 2,
+    'new cancellation cannot wait for an abandoned request');
+  cancellation.resolve(serverTask('cancelled')); await cancellingOld; await flush();
+  assert.equal(h.ui['source-fields'].disabled, true, 'old cancel must not unlock the new task');
+  assert.match(h.ui['task-message'].textContent, /正在向服务器确认取消/);
+  newCancellation.resolve(h.task('cancelled')); await cancellingNew; await flush();
+  assert.equal(h.ui['source-fields'].disabled, false);
+  assert.equal(h.ui['task-heading'].textContent, '已取消处理');
+  assert.equal(h.routes.length, 0);
+});
+
+test('late restoration responses cannot overwrite a new task or its reload recovery record', async () => {
+  for (const outcome of ['success', '404', 'offline']) {
+    const oldId = 'b'.repeat(32), oldStatus = deferred();
+    const storage = new Map([[storedTaskKey, storedTask({ id: oldId, confirmed: false })]]);
+    const h = await harness(caps, { storage, queuedRoutes: [[`/api/tasks/${oldId}`, oldStatus, { delayAbort: true }]] });
+    await h.click('abandon-recovery');
+    assert.equal(h.requests[1].options.signal.aborted, true);
+    await startLink(h, 'converting');
+    const saved = storage.get(storedTaskKey), message = h.ui['task-message'].textContent;
+    oldStatus.resolve(outcome === 'success' ? { ...serverTask('ready'), id: oldId }
+      : outcome === '404' ? httpError(404) : new TypeError('offline'));
+    await flush();
+    assert.equal(h.ui['task-heading'].textContent, '正在提取完整音轨');
+    assert.equal(h.ui['task-message'].textContent, message);
+    assert.equal(h.ui['source-fields'].disabled, true);
+    assert.equal(storage.get(storedTaskKey), saved);
+    const refreshed = await harness(caps, { storage, queuedRoutes: [[taskPath, serverTask('ready')]] });
+    assert.equal(refreshed.ui['task-heading'].textContent, '恢复的任务');
+    assert.equal(refreshed.ui['source-fields'].disabled, false);
+  }
+});
+
+test('a cancellation retry waiting across pageshow cannot cancel a replacement task', async () => {
+  const storage = new Map([[storedTaskKey, storedTask({ confirmed: false })]]), cancellation = deferred();
+  const h = await harness(caps, { storage, queuedRoutes: [[taskPath, httpError(404)]] });
+  h.queue(`${taskPath}/cancel`, cancellation);
+  const cancelling = h.click('cancel-button'); await flush();
+  await h.window.trigger('pagehide'); await h.window.trigger('pageshow', { persisted: true });
+  await h.click('abandon-recovery'); await startLink(h, 'converting');
+  const saved = storage.get(storedTaskKey), message = h.ui['task-message'].textContent;
+  cancellation.resolve(serverTask('cancelled')); await cancelling; await flush();
+  assert.equal(h.requests.filter(request => request.path.endsWith('/cancel')).length, 1);
+  assert.equal(h.ui['task-heading'].textContent, '正在提取完整音轨');
+  assert.equal(h.ui['task-message'].textContent, message);
+  assert.equal(h.ui['source-fields'].disabled, true);
+  assert.equal(storage.get(storedTaskKey), saved);
 });
 
 for (const status of [401, 403]) test(`restoration HTTP ${status} clears stale recovery state and shows auth feedback`, async () => {

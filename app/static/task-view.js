@@ -51,6 +51,8 @@ export function createTaskView(ui, state, sharing) {
     ui['cancel-button'].hidden = terminal;
     ui['cancel-button'].disabled = false;
     ui['reconnect-button'].hidden = true;
+    ui['abandon-recovery'].hidden = !state.restoring || terminal;
+    ui['recovery-note'].hidden = ui['abandon-recovery'].hidden;
     ui['new-task-button'].hidden = !terminal;
     ui['new-task-button'].textContent = task.state === 'ready' ? '提取另一个视频' : '重新提取';
     syncBusy();
@@ -100,6 +102,8 @@ export function createTaskView(ui, state, sharing) {
     ui['reconnect-button'].hidden = false;
     ui['cancel-button'].disabled = false;
     ui['new-task-button'].hidden = true;
+    ui['abandon-recovery'].hidden = false;
+    ui['recovery-note'].hidden = false;
     syncBusy();
   }
   return { feedback, syncBusy, safeFileUrl, clearResult, render, receiving, disconnected };

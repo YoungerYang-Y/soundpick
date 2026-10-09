@@ -12,7 +12,7 @@ function initialize() {
     'form-feedback', 'task-panel', 'task-heading', 'task-stage', 'task-message',
     'upload-progress', 'upload-bar', 'upload-label', 'result-content', 'result-meta', 'audio-player',
     'download-button', 'video-download-button', 'video-feedback', 'prepare-share', 'share-button',
-    'share-feedback', 'expiry-note', 'cancel-button', 'reconnect-button', 'new-task-button', 'file-details', 'process-steps',
+    'share-feedback', 'expiry-note', 'cancel-button', 'reconnect-button', 'new-task-button', 'abandon-recovery', 'recovery-note', 'file-details', 'process-steps',
   ].map(id => [id, element(id)]));
   const csrf = document.querySelector('input[name="csrf_token"]').value;
   // All task/transport lifetimes share this state; old generations cannot repaint a new view.
@@ -57,8 +57,10 @@ function initialize() {
     invalidate(); state.xhr?.abort(); state.xhr = null;
     clearTimeout(state.expiryTimer); view.clearResult();
     state.task = null; state.creation = null; state.cancelRequested = false; state.busy = false; state.restoring = false;
+    state.cancellation = null; state.cancellationVersion = null;
     clearStoredTask();
     ui['task-panel'].hidden = true; ui['reconnect-button'].hidden = true;
+    ui['abandon-recovery'].hidden = true; ui['recovery-note'].hidden = true;
     view.syncBusy(); view.feedback();
   }
   function clearStoredTask() {
@@ -105,6 +107,7 @@ function initialize() {
     ui['process-steps'].hidden = true; ui['task-heading'].textContent = '结果已过期';
     ui['task-stage'].textContent = '请重新提取'; ui['task-message'].textContent = '任务不存在或已过期，请重新提取。';
     ui['cancel-button'].hidden = true; ui['reconnect-button'].hidden = true; ui['new-task-button'].hidden = false;
+    ui['abandon-recovery'].hidden = true; ui['recovery-note'].hidden = true;
     view.syncBusy();
   }
   function armExpiry() {
@@ -219,9 +222,10 @@ function initialize() {
   async function createTask(operation, version) {
     try {
       const task = await api(operation.path, post(operation.body));
+      if (state.creation !== operation) return;
       operation.confirmed = true;
       saveStoredTask();
-      if (state.creation !== operation || state.suspended) return;
+      if (state.suspended) return;
       if (state.cancelRequested) {
         // A cancel may have looked up the id before creation reached the server.
         if (state.cancellation) await state.cancellation;
@@ -244,7 +248,9 @@ function initialize() {
     if (!state.task || terminalStates.has(state.task.state)) return;
     if (state.cancellation) {
       if (state.cancellationVersion === state.generation) return state.cancellation;
+      const operation = state.creation;
       await state.cancellation;
+      if (state.creation !== operation) return;
       return cancelTask();
     }
     state.cancelRequested = true;
@@ -321,6 +327,11 @@ function initialize() {
     void pollTask();
   });
   ui['cancel-button'].addEventListener('click', cancelTask);
+  ui['abandon-recovery'].addEventListener('click', () => {
+    resetTask();
+    view.feedback('已放弃本页面恢复。后台取消尚未确认，原任务可能仍在处理。');
+    (state.mode === 'link' ? ui['share-text'] : ui['video-file']).focus();
+  });
   for (const id of ['download-button', 'video-download-button']) ui[id].addEventListener('click', event => {
     if (expired()) { event.preventDefault(); markExpired(); }
   });
