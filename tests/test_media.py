@@ -116,7 +116,16 @@ print(json.dumps({"streams": [{"codec_type": "video"},
                              {"codec_type": "audio", "duration": "3"}],
                   "format": {"duration": "1" if output else "3"}}))
 """
-    processor = MediaProcessor(make_tools(settings, tmp_path, probe_code=probe))
+    convert = """
+import pathlib, sys
+if '-progress' in sys.argv:
+    print('out_time_us=3000000\\nprogress=end')
+else:
+    pathlib.Path(sys.argv[-1]).write_bytes(b'ID3test')
+"""
+    processor = MediaProcessor(
+        make_tools(settings, tmp_path, probe_code=probe, convert_code=convert)
+    )
     source = make_source(tmp_path)
     target = tmp_path / "output.mp3"
     with pytest.raises(MediaError) as error:

@@ -86,6 +86,67 @@ def probe(configured, path, *, packets=False):
     )
 
 
+def corrupt_second_audio_track(configured, source):
+    info = probe(configured, source, packets=True)
+    second_audio = [stream for stream in info["streams"] if stream["codec_type"] == "audio"][1]
+    assert second_audio["disposition"]["default"] == 1
+    audio_packets = [
+        packet for packet in info["packets"] if packet["stream_index"] == second_audio["index"]
+    ]
+    assert audio_packets
+    damaged = bytearray(source.read_bytes())
+    for packet in audio_packets:
+        start, size = int(packet["pos"]), int(packet["size"])
+        damaged[start : start + size] = bytes(size)
+    source.write_bytes(damaged)
+    return audio_packets
+
+
+@pytest.mark.parametrize("container", ["mp4", "mov"])
+def test_corrupt_default_second_audio_track_is_rejected(real_tools, tmp_path, container):
+    source = make_video(tmp_path, real_tools, container=container)
+    packets = corrupt_second_audio_track(real_tools, source)
+    original = source.read_bytes()
+    ffmpeg = shutil.which(real_tools.ffmpeg_bin)
+    decoded_second = subprocess.run(
+        [
+            ffmpeg,
+            "-nostdin",
+            "-v",
+            "error",
+            "-xerror",
+            "-err_detect",
+            "explode",
+            "-i",
+            str(source),
+            "-map",
+            "0:a:1",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        timeout=15,
+    )
+    assert packets
+    assert decoded_second.returncode != 0, decoded_second.stderr.decode(errors="replace")
+
+    audio = tmp_path / "audio.mp3"
+    assert abs(asyncio.run(MediaProcessor(real_tools).extract_audio(source, audio)) - 3) <= 0.25
+    assert audio.is_file()
+    assert audio.stat().st_size > 0
+
+    target = tmp_path / "video.mp4"
+    target.write_bytes(b"old partial")
+    with pytest.raises(MediaError) as error:
+        asyncio.run(MediaProcessor(real_tools).prepare_video(source, target))
+    assert error.value.code == "conversion_failed"
+    assert source.exists()
+    assert source.read_bytes() == original
+    assert audio.exists()
+    assert not target.exists()
+
+
 def test_real_mp4_keeps_original_bytes(real_tools, tmp_path):
     source = make_video(tmp_path, real_tools)
     original = source.read_bytes()

@@ -75,14 +75,19 @@ class MediaProcessor:
                 streams, container_duration = await self._probe(source)
                 self._validate_stream_presence(streams)
                 audio = next(s for s in streams if s.get("codec_type") == "audio")
-                original_duration = self._duration(audio.get("duration")) or container_duration
-                if original_duration is None:
+                original_duration = self._duration(audio.get("duration"))
+                duration_measured = original_duration is None
+                if original_duration is None and container_duration is None:
                     raise MediaError("无法确认视频声音时长", "invalid_media")
                 if (
-                    max(original_duration, container_duration or 0)
+                    max(original_duration or 0, container_duration or 0)
                     > self.settings.max_duration_seconds
                 ):
                     raise MediaError("视频超过时长限制", "duration_limit")
+                if original_duration is None:
+                    original_duration = await self._measure_audio_duration(source)
+                    if original_duration > self.settings.max_duration_seconds:
+                        raise MediaError("视频超过时长限制", "duration_limit")
                 await self._run(
                     self.ffmpeg,
                     "-nostdin",
@@ -119,6 +124,13 @@ class MediaProcessor:
                 ):
                     raise MediaError("无法确认转换后的声音时长", "conversion_failed")
                 tolerance = max(0.25, min(2.0, original_duration * 0.005))
+                if not duration_measured and abs(output_duration - original_duration) > tolerance:
+                    # Stream duration can include timestamp gaps. Recheck decoded
+                    # samples before treating the complete MP3 as truncated.
+                    original_duration = await self._measure_audio_duration(source)
+                    if original_duration > self.settings.max_duration_seconds:
+                        raise MediaError("视频超过时长限制", "duration_limit")
+                    tolerance = max(0.25, min(2.0, original_duration * 0.005))
                 if abs(output_duration - original_duration) > tolerance:
                     raise MediaError("转换后的声音不完整，请重新提取", "incomplete_audio")
                 succeeded = True
@@ -212,11 +224,11 @@ class MediaProcessor:
                     target.unlink(missing_ok=True)
 
     async def _decode_video(self, source: Path, streams: list[dict]) -> None:
-        # Container metadata alone cannot prove that the video packets decode.
-        # Decode every video stream to the null muxer without changing deliverable bytes.
+        # Validate every delivered motion video/audio stream without changing bytes.
+        # MP3 extraction checks only the first audio track; others may be the default.
         mapping = []
         for stream in streams:
-            if self._is_motion_video(stream):
+            if self._is_motion_video(stream) or stream.get("codec_type") == "audio":
                 mapping += ["-map", f"0:{stream['index']}"]
         await self._run(
             self.ffmpeg,
@@ -234,13 +246,60 @@ class MediaProcessor:
             "-i",
             str(source.resolve()),
             *mapping,
-            "-an",
             "-sn",
             "-dn",
             "-f",
             "null",
             "-",
         )
+
+    async def _measure_audio_duration(self, source: Path) -> float:
+        # Stream duration may be absent or include timestamp gaps. Count decoded
+        # samples independently of the video timeline and delayed audio start.
+        # One initial and one final progress report fit _run's bounded capture;
+        # the surrounding task timeout expires before another periodic report.
+        raw = await self._run(
+            self.ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-xerror",
+            "-abort_on",
+            "empty_output",
+            "-err_detect",
+            "explode",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-i",
+            str(source.resolve()),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-sn",
+            "-dn",
+            "-af",
+            "asetpts=N/SR/TB",
+            "-c:a",
+            "pcm_s16le",
+            "-stats_period",
+            str(self.settings.task_timeout_seconds + 1),
+            "-progress",
+            "pipe:1",
+            "-f",
+            "null",
+            "-",
+            capture=True,
+        )
+        progress = dict(
+            line.split("=", 1)
+            for line in raw.decode("ascii", errors="replace").splitlines()
+            if "=" in line
+        )
+        microseconds = self._duration(progress.get("out_time_us"))
+        if progress.get("progress") != "end" or microseconds is None:
+            raise MediaError("无法确认视频声音时长", "invalid_media")
+        return microseconds / 1_000_000
 
     async def _probe_video(self, path: Path) -> tuple[list[dict], dict]:
         raw = await self._run(

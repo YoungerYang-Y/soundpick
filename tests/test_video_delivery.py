@@ -12,6 +12,7 @@ from app.main import create_app
 from tests.test_media import real_video
 from tests.test_media_api import login
 from tests.test_mvp_flow import wait_terminal
+from tests.test_video import corrupt_second_audio_track, make_video
 
 
 @pytest.mark.parametrize("input_mode", ["upload", "share"])
@@ -166,6 +167,33 @@ def test_unsupported_video_keeps_successful_mp3(real_tools, tmp_path):
         assert task["video_filename"] is None
         assert task["video_message"] == "原视频暂无法保存为 MP4，MP3 仍可下载"
         assert client.get(task["download_url"]).content
+        unavailable = client.get(f"/files/{task['id']}?kind=video")
+        assert unavailable.status_code == 409
+        assert unavailable.json()["code"] == "video_unavailable"
+        directory = app.state.tasks.tasks[task["id"]].directory
+        assert sorted(path.name for path in directory.iterdir()) == ["audio.mp3"]
+
+
+def test_corrupt_default_second_audio_track_upload_keeps_only_mp3(real_tools, tmp_path):
+    source = make_video(tmp_path, real_tools)
+    corrupt_second_audio_track(real_tools, source)
+    app = create_app(real_tools)
+    with TestClient(app) as client:
+        token = login(client, real_tools)
+        response = client.post(
+            "/api/tasks/upload?filename=双音轨损坏.mp4",
+            content=source.read_bytes(),
+            headers={"X-CSRF-Token": token},
+        )
+        assert response.status_code == 202
+        task = wait_terminal(client, response.json()["id"])
+        assert task["state"] == "ready", task["message"]
+        assert task["video_download_url"] is None
+        assert task["video_filename"] is None
+        assert task["video_message"] == "原视频暂无法保存为 MP4，MP3 仍可下载"
+        audio = client.get(task["download_url"])
+        assert audio.status_code == 200
+        assert audio.content
         unavailable = client.get(f"/files/{task['id']}?kind=video")
         assert unavailable.status_code == 409
         assert unavailable.json()["code"] == "video_unavailable"
