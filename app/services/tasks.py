@@ -51,6 +51,7 @@ class Task:
     receive_deadline: float | None = None
     deliveries: int = 0
     cleanup_pending: bool = False
+    video_cleanup_pending: bool = False
     video_ready: bool = False
     video_message: str = ""
     request_id: str | None = None
@@ -153,8 +154,9 @@ class TaskManager:
         try:
             if task.directory.exists():
                 shutil.rmtree(task.directory)
-            was_pending = task.cleanup_pending
+            was_pending = task.cleanup_pending or task.video_cleanup_pending
             task.cleanup_pending = False
+            task.video_cleanup_pending = False
             if was_pending:
                 logger.info("task.cleaned", extra=self._task_log_fields(task))
         except OSError:
@@ -166,6 +168,22 @@ class TaskManager:
                     "task.cleanup_deferred",
                     extra=self._task_log_fields(task, error_category="storage_error"),
                 )
+
+    def _remove_partial_video(self, task: Task) -> None:
+        # A degraded task still delivers MP3: never use whole-directory cleanup here.
+        try:
+            (task.directory / ARTIFACTS["video"].stored_name).unlink(missing_ok=True)
+        except OSError:
+            if not task.video_cleanup_pending:
+                logger.warning(
+                    "task.cleanup_deferred",
+                    extra=self._task_log_fields(task, error_category="storage_error"),
+                )
+            task.video_cleanup_pending = True
+        else:
+            if task.video_cleanup_pending:
+                logger.info("task.cleaned", extra=self._task_log_fields(task))
+            task.video_cleanup_pending = False
 
     def _sweep(self) -> None:
         for task_id in list(self.quota_releases):
@@ -181,6 +199,8 @@ class TaskManager:
                 self._finish(task, "failed", "上传预约已过期，请重新选择视频")
             if task.cleanup_pending and not task.deliveries:
                 self._remove(task)
+            if task.video_cleanup_pending:
+                self._remove_partial_video(task)
             if task.expires_at is not None and task.expires_at <= now and not task.deliveries:
                 self._remove(task)
                 if not task.cleanup_pending:
@@ -405,6 +425,7 @@ class TaskManager:
                         raise
                     self._failure(task, exc.code)
                     task.video_message = "原视频暂无法保存为 MP4，MP3 仍可下载"
+                    self._remove_partial_video(task)
                 (task.directory / "input").unlink(missing_ok=True)
                 self._finish(task, "ready", "提取完成，可以试听或保存")
         except asyncio.CancelledError:

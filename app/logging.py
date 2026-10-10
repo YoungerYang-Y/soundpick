@@ -158,5 +158,16 @@ def setup_logging(level: str = "INFO") -> None:
     for name in ("uvicorn", "uvicorn.error"):
         server = logging.getLogger(name)
         server.setLevel(level)
-        for handler in server.handlers:
-            handler.setFormatter(JsonFormatter())
+        server.disabled = False
+        # Host handlers may also serve root/unrelated loggers. Detach them without
+        # changing their formatter or closing resources the host still owns.
+        for handler in list(server.handlers):
+            server.removeHandler(handler)
+            if isinstance(handler, _ConsoleHandler):
+                handler.close()
+        server.propagate = name == "uvicorn.error"
+    # Error records flow through this handler exactly once, even when Uvicorn
+    # has no log_config or the host originally propagated them to root.
+    handler = _ConsoleHandler()
+    handler.setFormatter(JsonFormatter())
+    logging.getLogger("uvicorn").addHandler(handler)

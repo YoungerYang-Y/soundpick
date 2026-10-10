@@ -86,6 +86,80 @@ def test_existing_root_handler_does_not_drop_fields_or_duplicate_application_log
     assert records[0]["request_id"] == "b" * 32
 
 
+@pytest.mark.parametrize("configuration", ["default", "none", "custom"])
+def test_uvicorn_logs_are_sanitized_once_without_changing_host_handlers(configuration):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent("""
+                import logging, logging.config, sys
+                from uvicorn import Config
+                from app.logging import setup_logging
+
+                configuration = sys.argv[1]
+                if configuration == 'default':
+                    Config('app.main:create_app', factory=True)
+                else:
+                    Config('app.main:create_app', factory=True, log_config=None)
+
+                class HostHandler(logging.StreamHandler):
+                    close_calls = 0
+                    def close(self):
+                        self.close_calls += 1
+                        super().close()
+
+                root = logging.getLogger()
+                host = HostHandler(sys.stdout)
+                host.setFormatter(logging.Formatter('HOST %(message)s'))
+                root.addHandler(host)
+                root.setLevel(logging.INFO)
+                root_handlers = list(root.handlers)
+                host_formatter = host.formatter
+                close_calls = host.close_calls
+                if configuration == 'custom':
+                    # A shared handler must be detached, not mutated or closed.
+                    logging.getLogger('uvicorn').addHandler(host)
+                    logging.getLogger('uvicorn').propagate = True
+                    child = HostHandler(sys.stderr)
+                    child.setFormatter(logging.Formatter('CHILD %(message)s'))
+                    logging.getLogger('uvicorn.error').addHandler(child)
+                    logging.getLogger('uvicorn.error').propagate = True
+                    child_close_calls = child.close_calls
+
+                setup_logging()
+                setup_logging()
+                assert root.handlers == root_handlers
+                assert host.formatter is host_formatter
+                assert host.close_calls == close_calls
+                if configuration == 'custom':
+                    assert child.close_calls == child_close_calls
+                    assert child.formatter._fmt == 'CHILD %(message)s'
+
+                logging.getLogger('uvicorn').info('Uvicorn running on %s', 'private-address')
+                try:
+                    raise ValueError('private-media-url-and-token')
+                except ValueError:
+                    logging.getLogger('uvicorn.error').error(
+                        'Exception in ASGI application: %s', 'private-cookie', exc_info=True)
+                logging.getLogger('uvicorn.access').info('private-query-and-client-ip')
+                logging.getLogger('unrelated.host').info('host-still-works')
+            """),
+            configuration,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "private" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stdout + result.stderr
+    lines = (result.stdout + result.stderr).splitlines()
+    assert lines.count("HOST host-still-works") == 1
+    records = [json.loads(line) for line in lines if line != "HOST host-still-works"]
+    assert [record["event"] for record in records] == ["server.listening", "server.request_failed"]
+    assert records[1]["exception_type"] == "ValueError"
+
+
 def test_request_event_covers_early_body_rejection_and_ignores_client_request_id(client, caplog):
     with caplog.at_level(logging.INFO, logger="app.middleware"):
         response = client.post(

@@ -174,6 +174,82 @@ def test_unsupported_video_keeps_successful_mp3(real_tools, tmp_path):
         assert sorted(path.name for path in directory.iterdir()) == ["audio.mp3"]
 
 
+def test_failed_video_cleanup_retries_without_removing_live_mp3(
+    real_tools, tmp_path, monkeypatch, caplog
+):
+    import logging
+    from pathlib import Path
+
+    from app.services.errors import MediaError
+    from app.services.media import MediaProcessor
+    from app.services.network import SafeHTTP
+    from app.services.tasks import TaskManager
+    from tests.test_video import write_wrapper
+
+    source = make_video(tmp_path, real_tools, container="mov")
+    executable = shutil.which(real_tools.ffmpeg_bin)
+    wrapper = write_wrapper(
+        tmp_path / "failed-remux",
+        f"""
+import os, pathlib, sys
+if sys.argv[-1].endswith('.mp4'):
+    pathlib.Path(sys.argv[-1]).write_bytes(b'partial-video')
+    sys.exit(1)
+os.execv({executable!r}, [{executable!r}, *sys.argv[1:]])
+""",
+    )
+    configured = real_tools.model_copy(update={"ffmpeg_bin": wrapper})
+    original_unlink = Path.unlink
+    unavailable = True
+
+    def unlink(path, *args, **kwargs):
+        if path.name == "video.mp4" and unavailable:
+            raise PermissionError("private transient storage failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+
+    async def exercise():
+        nonlocal unavailable
+        manager = TaskManager(configured, MediaProcessor(configured), {}, SafeHTTP())
+        await manager.open()
+        try:
+            task = manager.reserve("owner", "sample")
+            shutil.copyfile(source, task.directory / "input")
+            manager.start(task)
+            await task.runner
+            assert task.state == "ready", task.message
+            assert manager.view(task)["video_download_url"] is None
+            with pytest.raises(MediaError) as exc:
+                manager.acquire_file(task, "video")
+            assert exc.value.code == "video_unavailable"
+            audio = manager.acquire_file(task)
+            original_audio = audio.read_bytes()
+            assert original_audio
+            assert (task.directory / "video.mp4").read_bytes() == b"partial-video"
+            await manager.sweep()
+            await manager.sweep()
+            unavailable = False
+            await manager.sweep()
+            assert sorted(path.name for path in task.directory.iterdir()) == ["audio.mp3"]
+            assert audio.read_bytes() == original_audio
+            assert manager.get(task.id, "owner").state == "ready"
+            task.expires_at = time.time() - 1
+            await manager.sweep()
+            assert audio.exists()
+            await manager.release_file(task)
+            assert not task.directory.exists()
+        finally:
+            unavailable = False
+            await manager.close()
+
+    with caplog.at_level(logging.INFO, logger="app.services.tasks"):
+        asyncio.run(exercise())
+    assert sum(record.msg == "task.cleanup_deferred" for record in caplog.records) == 1
+    assert sum(record.msg == "task.cleaned" for record in caplog.records) == 1
+    assert "private transient storage failure" not in caplog.text
+
+
 def test_corrupt_default_second_audio_track_upload_keeps_only_mp3(real_tools, tmp_path):
     source = make_video(tmp_path, real_tools)
     corrupt_second_audio_track(real_tools, source)
