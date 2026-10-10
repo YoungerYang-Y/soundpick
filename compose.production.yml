@@ -1,0 +1,48 @@
+# Start with: docker compose -f compose.production.yml --env-file .env.production up -d
+services:
+  app:
+    image: "${SOUNDPICK_IMAGE:-soundpick:0.1.0-66819f9}"
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      DATA_DIR: /app/data
+      FFMPEG_BIN: ffmpeg
+      FFPROBE_BIN: ffprobe
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    volumes:
+      - soundpick-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - soundpick
+      - onepanel
+
+volumes:
+  soundpick-data:
+
+networks:
+  soundpick:
+  onepanel:
+    external: true
+    name: 1panel-network
