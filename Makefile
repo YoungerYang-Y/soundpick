@@ -1,4 +1,4 @@
-.PHONY: setup env dev test coverage browser-check lint ui-check runtime-check
+.PHONY: setup env dev test coverage browser-check lint ui-check runtime-check docker-check
 
 setup:
 	./scripts/setup.sh
@@ -31,3 +31,6 @@ ui-check:
 
 runtime-check:
 	.venv/bin/python -m scripts.check_runtime
+
+docker-check:
+	.venv/bin/python scripts/check_docker.py

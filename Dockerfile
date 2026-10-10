@@ -6,8 +6,9 @@ RUN python -m pip install --no-cache-dir --prefix=/install -r requirements.lock
 FROM python:3.14-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=15 update \
+    && apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=15 install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system soundpick \
     && useradd --system --gid soundpick --home-dir /app soundpick \

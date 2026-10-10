@@ -1,0 +1,83 @@
+# Standalone, disposable local acceptance stack. Never merge with compose.yml.
+services:
+  app:
+    build: .
+    image: ${SOUNDPICK_TEST_IMAGE:?Run scripts/check_docker.py}
+    init: true
+    restart: "no"
+    env_file:
+      - ${SOUNDPICK_TEST_ENV:?Run scripts/check_docker.py}
+    environment:
+      APP_ENV: local
+      COOKIE_SECURE: "false"
+      DATA_DIR: /app/data
+      FFMPEG_BIN: ffmpeg
+      FFPROBE_BIN: ffprobe
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: soundpick:{docker-local-test}
+      REDIS_TIMEOUT_SECONDS: "0.1"
+      REDIS_RETRY_SECONDS: "1"
+    ports:
+      - "127.0.0.1::8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - app-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - local-test
+  redis:
+    image: redis:7.4-alpine
+    user: redis
+    # Test-only: Redis is confined to this project's bridge, with no host port.
+    command: ["redis-server", "--protected-mode", "no", "--appendonly", "yes", "--appendfsync", "always", "--save", ""]
+    restart: "no"
+    volumes:
+      - redis-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - local-test
+volumes:
+  app-data:
+  redis-data:
+networks:
+  local-test:
+    driver: bridge
