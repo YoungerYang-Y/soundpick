@@ -28,7 +28,8 @@ soundpick/
 │   ├── main.py                 # FastAPI 应用工厂与当前 HTTP 路由
 │   ├── auth.py                 # 共享密码、会话校验、CSRF 与登录限速
 │   ├── config.py               # 环境配置与安全校验
-│   ├── middleware.py           # 小请求上限与上传流实际字节边界
+│   ├── logging.py              # 安全 JSON 日志与请求上下文，依赖标准库
+│   ├── middleware.py           # 请求关联日志、限频、请求体与上传流字节边界
 │   ├── resolver/               # 分享识别、平台适配与可配置 JSON provider
 │   ├── services/               # tasks、media、network、保护账本和公开错误
 │   ├── templates/              # Jinja2 页面
@@ -87,15 +88,16 @@ flowchart TD
 | 模块 | 职责 | 依赖 |
 |------|------|------|
 | `app/main.py` | 应用工厂、路由装配、HTTP 输入输出 | 配置、认证、静态与模板资源 |
-| `app/auth.py`、`app/middleware.py` | 共享密码会话、CSRF、早期限频和请求体边界 | 配置、保护账本、Starlette |
+| `app/auth.py`、`app/middleware.py` | 共享密码会话、CSRF、早期限频、请求体边界与安全请求日志 | 配置、保护账本、日志、Starlette |
 | `app/config.py` | 加载和校验运行配置 | pydantic-settings |
+| `app/logging.py` | 独立 JSON 控制台 handler、字段白名单、请求关联上下文 | Python 标准库；服务可读取上下文，无 HTTP 依赖 |
 | `app/resolver/` | 分享识别、平台原视频地址适配，排除错误 ID/BGM | 安全网络、resolver 基础契约 |
 | `app/services/tasks.py` | 单活动任务、会话所属结果、容量、取消与清理 | media、resolver、network、临时文件系统 |
 | `app/services/protection.py` | 北京日成功额度预占/确认/释放、接口限频及 Redis 故障降级 | 可选 Redis、进程内有界保护 |
 | `app/services/media.py` | 视频/声音流、时长与完整 MP3 校验、原 MP4 保留或无损封装，子进程回收 | FFmpeg/FFprobe、配置 |
 | `app/services/network.py` | 公网 DNS 固定、逐跳校验、有限响应与流式下载 | httpx |
 | `app/templates/`、`app/static/` | 手机优先页面与交互 | 页面/API 契约 |
-| `scripts/` | 准备本地环境、安全初始化 `.env` | mise、Python、pip |
+| `scripts/` | 准备本地环境、初始化 `.env`、运行检查与独立 Docker/Redis 验收 | mise、Python、pip；容器验收另需 Docker Compose |
 
 ## 关键架构决策
 

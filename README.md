@@ -109,7 +109,7 @@ FFPROBE_BIN=/absolute/path/to/ffprobe
 | 自检退出码 | 媒体及配置的 Redis 检查通过返回 0；任一失败返回 1，Redis 故障仍允许应用启动并降级 |
 
 - Python 依赖有变更时重新运行 `./scripts/setup.sh`；仅设置 `REDIS_URL` 不能补齐缺失的客户端。
-- Redis 失败日志和自检使用固定 `reason` 分类：`client_unavailable`（客户端无法导入）、`timeout`（超时）、`authentication`（认证失败）、`permission`（权限不足）、`connection`（连接失败）。不输出连接串或原始异常。
+- Redis 失败日志的 `error_category` 与自检的 `reason` 使用固定分类：`client_unavailable`（客户端无法导入）、`timeout`（超时）、`authentication`（认证失败）、`permission`（权限不足）、`connection`（连接失败）。不输出连接串或原始异常。
 - 只读检查通过不证明写入权限、Redis 持久化或连接长期稳定。间歇建连超时应检查链路与 Redis 入口；增加超时会延长同步等待，不能代替定位。
 
 ### 使用
@@ -158,6 +158,31 @@ COOKIE_SECURE=true
 
 容器环境的历史验证及其版本边界见[容器验证记录](docs/references/container-verification.md)。
 
+本地 Docker 验收使用独立测试栈：
+
+```bash
+make docker-check
+```
+
+- 每次显式拉取 `redis:7.4-alpine`，构建当前源码；新建独立 Redis 容器、网络和 AOF 数据卷，Redis 不发布宿主端口。
+- `compose.test.yml` 单独使用，测试脚本提供临时凭据与显式 Compose 环境文件，始终连接测试容器。测试栈不读取项目 `.env`；Docker 引擎和镜像下载仍使用本机 Docker 配置。
+- 实际检查首音轨 MP3、原 MP4、HTTP 文件边界、Redis 原子额度/北京跨日/故障降级/恢复/重启，以及结构化日志；不访问远端视频平台。
+- 测试使用回环随机端口及 `local` / `COOKIE_SECURE=false`；不覆盖生产 HTTPS、真实反向代理或手机真机验收。Redis 超时保持默认 0.1 秒，恢复冷却缩短为 1 秒，便于故障测试。
+- 安全报告及已脱敏日志保存在 `work/runtime/docker-local-redis-<随机标识>/`；退出时清理本轮容器、卷、网络、镜像和临时凭据。失败或未执行的阶段均不会报告为通过。
+
+应用日志默认以 JSON 单行输出到控制台，`LOG_LEVEL` 默认 `INFO`。原生 Uvicorn 请求日志由受限字段的 `request.completed` 事件代替；响应提供服务器生成的 `X-Request-ID`，任务保留创建请求的关联 ID。
+
+| 日志事件 / 字段 | 排查用途 |
+| --- | --- |
+| `application.started` / `application.stopped` | 启停、应用环境、媒体工具能力、实际防刷存储 |
+| `request.completed` | 请求方法、路由模板、状态码、耗时；拒绝时包含错误分类与等待时间 |
+| `task.created` / `task.stage` / `task.failed` | 按 `task_id` 与初始 `request_id` 串联阶段；`elapsed_ms` 从任务创建起累计 |
+| `task.cleanup_deferred` / `task.quota_release_deferred` | 文件清理或额度释放暂缓；首次失败告警，后续按原机制重试 |
+| `protection.redis_degraded` / `protection.redis_connected` | 故障原因、内存降级、冷却时间和恢复合并 |
+| `response_completed` | 日志生成时，中间件是否已观察到最后响应体发送；不证明客户端已完整收到 |
+
+成功的健康检查、静态资源和任务轮询不记请求日志；429 按路由每 30 秒采样，下一条记录用 `suppressed_count` 汇总间隔内省略的次数。日志不包含密码、Cookie、CSRF、客户端 IP、查询参数、原始分享、标题、媒体地址或异常原文/堆栈；`error_category` 和 `exception_type` 保留固定分类与异常类型。容器日志轮转为每文件 10 MiB、最多 3 个文件。
+
 ## 配置
 
 完整变量见 [.env.example](.env.example)。环境变量优先于 `.env`。
@@ -167,6 +192,7 @@ COOKIE_SECURE=true
 | `APP_PASSWORD` | 初始化生成 | 共享访问密码，12–128 字符 |
 | `SESSION_SECRET` | 初始化生成 | 会话签名密钥，至少 32 字符 |
 | `APP_ENV` / `COOKIE_SECURE` | 初始化为 `local` / `false` | 生产环境必须使用 `production` / `true` 与 HTTPS |
+| `LOG_LEVEL` | `INFO` | 应用及运行中的 Uvicorn 日志等级；支持 `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` |
 | `DATA_DIR` | `data` | 媒体工作目录 |
 | `REDIS_URL` | 空 | 可选 `redis://` / `rediss://` 连接 URL；查询参数仅允许 `db`；未设置时使用进程内保护 |
 | `REDIS_KEY_PREFIX` | `soundpick:{protection}` | 此部署在 Redis 中使用的保护数据前缀 |
