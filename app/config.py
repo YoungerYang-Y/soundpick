@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     app_name: str = "音拾"
     app_env: Literal["local", "production"] = "production"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     app_password: SecretStr = Field(min_length=12, max_length=128)
     session_secret: SecretStr = Field(min_length=32)
     cookie_secure: bool = True

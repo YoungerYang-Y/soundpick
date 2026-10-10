@@ -94,8 +94,9 @@ def test_unexpected_failure_logs_stage_and_type_without_private_values(settings,
             # Missing adapter is an internal programming failure, not public platform content.
             await task.runner
             assert task.state == "failed"
-            assert "resolving" in caplog.text
-            assert "KeyError" in caplog.text
+            failure = next(record for record in caplog.records if record.msg == "task.failed")
+            assert failure.stage == "resolving"
+            assert failure.error_category == "KeyError"
             assert "private-share" not in caplog.text
             assert "private-title" not in caplog.text
             assert "secret-cookie" not in caplog.text

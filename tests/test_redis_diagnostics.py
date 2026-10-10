@@ -48,8 +48,10 @@ def test_failure_logs_identify_cause_without_changing_fallback_or_cooldown(
         clock[0] += 30
         store.check_rate("poll", "owner")
         assert len(attempts) == 2
-        assert f"reason={reason}" in caplog.text
-        assert "30" in caplog.text
+        events = [record for record in caplog.records if record.msg == "protection.redis_degraded"]
+        assert len(events) == 2
+        assert all(record.error_category == reason for record in events)
+        assert all(record.retry_after_seconds == 30 for record in events)
         assert "diagnostic-secret" not in caplog.text
         assert "redis://" not in caplog.text
     finally:
@@ -68,7 +70,10 @@ def test_missing_client_is_distinguished_while_memory_protection_stays_available
         store.succeed("completed")
         assert store.mode == "memory"
         assert len(store.memory.quota_snapshot()) == 1
-        assert "reason=client_unavailable" in caplog.text
+        event = next(
+            record for record in caplog.records if record.msg == "protection.redis_degraded"
+        )
+        assert event.error_category == "client_unavailable"
         assert "diagnostic-secret" not in caplog.text
     finally:
         store.close()

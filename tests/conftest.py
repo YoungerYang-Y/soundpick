@@ -1,8 +1,24 @@
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+
+
+@pytest.fixture
+def caplog(caplog):
+    """Capture the application's isolated logger as well as pytest's root logger."""
+    application = logging.getLogger("app")
+    previous = application.propagate
+    application.propagate = False
+    application.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        application.removeHandler(caplog.handler)
+        application.propagate = previous
 
 
 def pytest_addoption(parser):

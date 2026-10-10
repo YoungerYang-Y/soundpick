@@ -11,10 +11,12 @@ import shutil
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Literal
 
 from app.config import Settings
+from app.logging import get_request_id
 from app.resolver.base import MediaResolver
 from app.resolver.registry import platform_of
 from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
@@ -51,6 +53,8 @@ class Task:
     cleanup_pending: bool = False
     video_ready: bool = False
     video_message: str = ""
+    request_id: str | None = None
+    started_at: float = dataclass_field(default_factory=time.monotonic)
 
 
 class TaskManager:
@@ -116,14 +120,32 @@ class TaskManager:
             with contextlib.suppress(OSError, MediaError):
                 await self.sweep()
 
-    def _release_quota(self, task_id: str) -> None:
+    def _release_quota(
+        self,
+        task_id: str,
+        *,
+        request_id: str | None = None,
+        input_kind: InputKind | None = None,
+    ) -> None:
         try:
             self.protection.release(task_id)
-        except MediaError:
+        except MediaError as exc:
             # At most ten reservations can be outstanding. Keep their IDs until
             # storage recovers; deleting media must not lose the release obligation.
+            first_defer = task_id not in self.quota_releases
             self.quota_releases.add(task_id)
-            logger.warning("quota release deferred", extra={"task_id": task_id})
+            if first_defer:
+                task = self.tasks.get(task_id)
+                logger.warning(
+                    "task.quota_release_deferred",
+                    extra=self._task_log_fields(
+                        task,
+                        task_id=task_id,
+                        request_id=task.request_id if task else request_id,
+                        input_kind=task.input_kind if task else input_kind,
+                        error_category=self._safe_category(exc.code),
+                    ),
+                )
         else:
             self.quota_releases.discard(task_id)
 
@@ -131,10 +153,19 @@ class TaskManager:
         try:
             if task.directory.exists():
                 shutil.rmtree(task.directory)
+            was_pending = task.cleanup_pending
             task.cleanup_pending = False
+            if was_pending:
+                logger.info("task.cleaned", extra=self._task_log_fields(task))
         except OSError:
             # Keep this bounded task reachable for the next sweep/startup cleanup.
+            first_defer = not task.cleanup_pending
             task.cleanup_pending = True
+            if first_defer:
+                logger.warning(
+                    "task.cleanup_deferred",
+                    extra=self._task_log_fields(task, error_category="storage_error"),
+                )
 
     def _sweep(self) -> None:
         for task_id in list(self.quota_releases):
@@ -168,6 +199,7 @@ class TaskManager:
         input_kind: InputKind = "upload",
         share_url: str | None = None,
     ) -> Task:
+        request_id = get_request_id()
         if task_id is not None and not re.fullmatch(r"[a-f0-9]{32}", task_id):
             raise MediaError("任务标识格式无效", "invalid_input", 400)
         self._sweep()
@@ -193,7 +225,7 @@ class TaskManager:
         try:
             directory.mkdir(mode=0o700)
         except OSError:
-            self._release_quota(task_id)
+            self._release_quota(task_id, request_id=request_id, input_kind=input_kind)
             raise MediaError("临时存储不可用，请稍后重试", "storage_error", 503) from None
         title = title.encode("utf-8", errors="replace").decode("utf-8")
         task = Task(
@@ -203,9 +235,14 @@ class TaskManager:
             title[:1000],
             input_kind=input_kind,
             input_fingerprint=fingerprint,
+            request_id=request_id,
         )
         task.receive_deadline = time.time() + self.settings.upload_timeout_seconds
         self.tasks[task.id] = task
+        logger.info(
+            "task.created",
+            extra=self._task_log_fields(task, input_kind=task.input_kind),
+        )
         return task
 
     @staticmethod
@@ -252,16 +289,42 @@ class TaskManager:
 
     def _stage(self, task: Task, state: TaskState, message: str) -> None:
         task.state, task.message = state, message
-        logger.info("task stage", extra={"task_id": task.id, "stage": state})
+        logger.info(
+            "task.stage",
+            extra=self._task_log_fields(
+                task,
+                stage=state,
+                elapsed_ms=max(0, int((time.monotonic() - task.started_at) * 1000)),
+            ),
+        )
 
     def _failure(self, task: Task, category: str) -> None:
         # Never log exception messages, URLs, titles or traceback locals.
         logger.warning(
-            "task failure stage=%s category=%s",
-            task.state,
-            category,
-            extra={"task_id": task.id, "stage": task.state, "error_category": category},
+            "task.failed",
+            extra=self._task_log_fields(
+                task,
+                stage=task.state,
+                error_category=self._safe_category(category),
+                elapsed_ms=max(0, int((time.monotonic() - task.started_at) * 1000)),
+            ),
         )
+
+    @staticmethod
+    def _safe_category(category: str) -> str:
+        if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,63}", category):
+            return category
+        return "unexpected_error"
+
+    @staticmethod
+    def _task_log_fields(task: Task | None, **fields: str | int | None) -> dict:
+        values = {
+            "task_id": task.id if task else None,
+            "request_id": task.request_id if task else None,
+            "input_kind": task.input_kind if task else None,
+        }
+        values.update(fields)
+        return {key: value for key, value in values.items() if value is not None}
 
     def _finish(self, task: Task, state: TaskState, message: str) -> None:
         if state == "ready":

@@ -1,5 +1,6 @@
 """ASGI application factory; importing modules does not require credentials."""
 
+import logging
 import secrets
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
@@ -22,7 +23,8 @@ from app.auth import (
     valid_csrf,
 )
 from app.config import Settings
-from app.middleware import BodyLimitMiddleware, RateLimitMiddleware
+from app.logging import setup_logging
+from app.middleware import BodyLimitMiddleware, RateLimitMiddleware, RequestLogMiddleware
 from app.resolver.registry import PlatformSpec, build_resolvers, extract_share_url, platform_of
 from app.services.artifacts import ARTIFACTS, ArtifactKind, download_filename
 from app.services.errors import MediaError
@@ -32,6 +34,7 @@ from app.services.protection import DAILY_SUCCESS_LIMIT
 from app.services.tasks import Task, TaskManager
 
 APP_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 InputModel = TypeVar("InputModel", bound=BaseModel)
 
 
@@ -48,7 +51,9 @@ class LinkSubmission(BaseModel):
 def create_app(
     settings: Settings | None = None, *, platforms: Sequence[PlatformSpec] | None = None
 ) -> FastAPI:
+    setup_logging()
     settings = settings or Settings()
+    setup_logging(settings.log_level)
     network = SafeHTTP()
     resolvers = build_resolvers(settings, network, specs=platforms)
     media = MediaProcessor(settings)
@@ -58,12 +63,25 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app):
-        await media.check_readiness()
-        await tasks.open()
+        try:
+            await media.check_readiness()
+            await tasks.open()
+        except Exception as exc:
+            logger.error("application.startup_failed", extra={"exception_type": type(exc).__name__})
+            raise
+        logger.info(
+            "application.started",
+            extra={
+                "app_env": settings.app_env,
+                "backend": tasks.protection.mode,
+                "media_available": media.available,
+            },
+        )
         try:
             yield
         finally:
             await tasks.close()
+            logger.info("application.stopped")
 
     app = FastAPI(
         title=settings.app_name, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
@@ -101,12 +119,26 @@ def create_app(
 
     @app.exception_handler(MediaError)
     async def media_error(request: Request, exc: MediaError) -> Response:
+        request.scope["soundpick.error_category"] = exc.code
         content = {"detail": exc.message, "code": exc.code}
         headers = {}
         if exc.retry_after is not None:
             content["retry_after"] = exc.retry_after
             headers["Retry-After"] = str(exc.retry_after)
         return JSONResponse(content, status_code=exc.status, headers=headers)
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception) -> Response:
+        # Starlette's outer error handler runs after our request context unwinds.
+        # Retain only the server-generated ID; the middleware already logged the type.
+        headers = {}
+        if request_id := request.scope.get("soundpick.request_id"):
+            headers["X-Request-ID"] = request_id
+        return JSONResponse(
+            {"detail": "服务暂时无法完成请求，请稍后重试", "code": "internal_error"},
+            status_code=500,
+            headers=headers,
+        )
 
     def render_login(request: Request, error: str | None = None, status: int = 200) -> Response:
         return templates.TemplateResponse(
@@ -149,11 +181,14 @@ def create_app(
     async def login(request: Request) -> Response:
         form = await request.form()
         if not valid_csrf(request, form.get("csrf_token")):
+            request.scope["soundpick.error_category"] = "csrf"
             return render_login(request, "页面已过期，请重新输入口令。", 403)
         password = form.get("password")
         if not isinstance(password, str) or not 1 <= len(password) <= 128:
+            request.scope["soundpick.error_category"] = "invalid_input"
             return render_login(request, "口令格式不正确。", 400)
         if not password_matches(password, settings):
+            request.scope["soundpick.error_category"] = "unauthorized"
             return render_login(request, "口令不正确，请重试。", 401)
         request.session.clear()
         request.session["authenticated"] = session_fingerprint(settings)
@@ -175,6 +210,7 @@ def create_app(
     async def logout(request: Request) -> Response:
         form = await request.form()
         if not valid_csrf(request, form.get("csrf_token")):
+            request.scope["soundpick.error_category"] = "csrf"
             return JSONResponse({"detail": "页面已过期，请刷新后再试"}, status_code=403)
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
@@ -296,4 +332,5 @@ def create_app(
         response.media_task = task
         return response
 
+    app.add_middleware(RequestLogMiddleware)
     return app

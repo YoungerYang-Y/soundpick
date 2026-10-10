@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 
 from app.services.errors import MediaError
 from app.services.memory_protection import DAILY_SUCCESS_LIMIT, MemoryProtection
-from app.services.redis_diagnostics import FAILURE_MESSAGES, redis_failure_reason
+from app.services.redis_diagnostics import redis_failure_reason
 
 __all__ = ["DAILY_SUCCESS_LIMIT", "ProtectionStore"]
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class ProtectionStore:
         self._opened = False
         self._connected = False
         self._next_retry = 0.0
+        self._memory_logged = False
         self._lock = threading.RLock()
 
     @property
@@ -117,7 +118,15 @@ class ProtectionStore:
             self.memory.check_rate(groups, identity)
 
     def _ensure_remote(self) -> None:
-        if not self.redis_url or self._connected or self.retry_clock() < self._next_retry:
+        if not self.redis_url:
+            if not self._memory_logged:
+                logger.info(
+                    "protection.memory",
+                    extra={"backend": "memory", "error_category": "redis_not_configured"},
+                )
+                self._memory_logged = True
+            return
+        if self._connected or self.retry_clock() < self._next_retry:
             return
         try:
             if self._backend is None:
@@ -136,17 +145,25 @@ class ProtectionStore:
         except Exception as error:
             self._degrade(error)
             return
+        previous_backend = self.mode
         self._connected = True
-        logger.info("防刷存储使用 Redis；内存额度已合并")
+        logger.info(
+            "protection.redis_connected",
+            extra={"backend": "redis", "previous_backend": previous_backend},
+        )
 
     def _degrade(self, error: Exception) -> None:
         # Fixed categories/messages only: exception details can contain credentials.
         reason = redis_failure_reason(error)
+        previous_backend = self.mode
         logger.warning(
-            "Redis 防刷存储不可用（reason=%s：%s），使用内存保护；%g 秒后允许重试",
-            reason,
-            FAILURE_MESSAGES[reason],
-            self.retry_seconds,
+            "protection.redis_degraded",
+            extra={
+                "backend": "memory",
+                "previous_backend": previous_backend,
+                "error_category": reason,
+                "retry_after_seconds": self.retry_seconds,
+            },
         )
         self._connected = False
         self._next_retry = self.retry_clock() + self.retry_seconds
